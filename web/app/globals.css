@@ -1,0 +1,51 @@
+@import "tailwindcss";
+
+:root {
+  --background: #0f1117;
+  --foreground: #e4e4e7;
+  --card: #1a1d27;
+  --card-hover: #22252f;
+  --border: #2a2d3a;
+  --muted: #71717a;
+  --accent: #06b6d4;
+  --accent-hover: #22d3ee;
+  --error: #ef4444;
+  --error-bg: rgba(239, 68, 68, 0.1);
+  --success: #22c55e;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes pulse-fade {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 0.15; }
+}
+
+.animate-spin-slow {
+  animation: spin 1s linear infinite;
+}
+
+.skeleton {
+  animation: pulse-fade 1.5s ease-in-out infinite;
+  background: var(--border);
+  border-radius: 6px;
+}
