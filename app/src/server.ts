@@ -13,8 +13,8 @@ import { SealClient } from "@mysten/seal";
 import { resolve, dirname, join } from "path";
 import { mkdirSync } from "fs";
 import { homedir } from "os";
-import { initDb, upsertFile } from "./db.ts";
-import { initWalrus, uploadBlob } from "./walrus.ts";
+import { initDb, upsertFile, getFile, deleteFile } from "./db.ts";
+import { initWalrus, uploadBlob, deleteBlobFromWalrus } from "./walrus.ts";
 import { initSeal, encrypt } from "./seal.ts";
 
 // Bun's Server type is generic; we don't use WebSockets so `unknown` suffices.
@@ -336,6 +336,15 @@ function handleUnlink(body: Record<string, unknown>): Response {
   parent.children.delete(name);
   parent.mtime = new Date();
   log("unlink", path, `removed (was ${size}B)`);
+
+  // Fire-and-forget: delete blob from Walrus + remove DB record
+  if (!isInternalFile(path)) {
+    const filename = path.split("/").pop()!;
+    deleteFileFromWalrus(filename).catch((err) =>
+      logError("delete", path, String(err)),
+    );
+  }
+
   return jsonOk({});
 }
 
@@ -487,10 +496,19 @@ async function uploadFileToWalrus(filename: string, content: Buffer, size: numbe
   log("upload", filename, "encrypting...");
   const encrypted = await encrypt(new Uint8Array(content));
   log("upload", filename, `encrypted (${content.length}→${encrypted.length}B), uploading to Walrus...`);
-  const blobId = await uploadBlob(encrypted, adminKeypair, { epochs: STORAGE_EPOCHS });
-  log("upload", filename, `uploaded, blobId=${blobId} (${STORAGE_EPOCHS} epochs)`);
-  upsertFile(filename, blobId, size, STORAGE_EPOCHS);
+  const { blobId, blobObjectId } = await uploadBlob(encrypted, adminKeypair, { epochs: STORAGE_EPOCHS });
+  log("upload", filename, `uploaded, blobId=${blobId} objectId=${blobObjectId} (${STORAGE_EPOCHS} epochs)`);
+  upsertFile(filename, blobId, blobObjectId, size, STORAGE_EPOCHS);
   log("upload", filename, `tracked in DB`);
+}
+
+async function deleteFileFromWalrus(filename: string): Promise<void> {
+  const record = getFile(filename);
+  if (!record?.blob_object_id) return;
+  log("delete", filename, `deleting blob objectId=${record.blob_object_id}...`);
+  await deleteBlobFromWalrus(record.blob_object_id, adminKeypair);
+  deleteFile(filename);
+  log("delete", filename, `blob deleted and DB record removed`);
 }
 
 // ── Handler dispatch table ──────────────────────────────────

@@ -16,14 +16,24 @@ export async function uploadBlob(
   data: Uint8Array,
   signer: Keypair,
   opts?: { epochs?: number; deletable?: boolean },
-): Promise<string> {
-  const { blobId } = await extendedClient!.walrus.writeBlob({
+): Promise<{ blobId: string; blobObjectId: string }> {
+  const { blobId, blobObject } = await extendedClient!.walrus.writeBlob({
     blob: data,
     deletable: opts?.deletable ?? true,
     epochs: opts?.epochs ?? 3,
     signer,
   });
-  return blobId;
+  return { blobId, blobObjectId: blobObject.id };
+}
+
+export async function deleteBlobFromWalrus(
+  blobObjectId: string,
+  signer: Keypair,
+): Promise<void> {
+  await extendedClient!.walrus.executeDeleteBlobTransaction({
+    blobObjectId,
+    signer,
+  });
 }
 
 export async function downloadBlob(blobId: string): Promise<Uint8Array> {
