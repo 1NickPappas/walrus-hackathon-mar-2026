@@ -115,6 +115,21 @@ function jsonError(error: string, status: number): Response {
   });
 }
 
+// ── Logging ────────────────────────────────────────────────
+
+function timestamp(): string {
+  return new Date().toISOString().slice(11, 23); // HH:MM:SS.mmm
+}
+
+function log(op: string, detail: string, extra = ""): void {
+  const suffix = extra ? `  ${extra}` : "";
+  console.log(`${timestamp()} [${op}] ${detail}${suffix}`);
+}
+
+function logError(op: string, detail: string, error: string): void {
+  console.log(`${timestamp()} [${op}] ${detail}  ✗ ${error}`);
+}
+
 // ── Operation handlers ──────────────────────────────────────
 
 type HandlerFn = (body: Record<string, unknown>) => Response;
@@ -122,26 +137,47 @@ type HandlerFn = (body: Record<string, unknown>) => Response;
 function handleGetattr(body: Record<string, unknown>): Response {
   const path = body.path as string;
   const node = resolvePath(path);
-  if (!node) return jsonError("ENOENT", 404);
-  return jsonOk({ stat: makeStat(node) });
+  if (!node) {
+    logError("getattr", path, "ENOENT");
+    return jsonError("ENOENT", 404);
+  }
+  const stat = makeStat(node);
+  log("getattr", path, `${node.type} mode=${stat.mode.toString(8)} size=${stat.size}`);
+  return jsonOk({ stat });
 }
 
 function handleReaddir(body: Record<string, unknown>): Response {
   const path = body.path as string;
   const node = resolvePath(path);
-  if (!node) return jsonError("ENOENT", 404);
-  if (node.type !== "dir") return jsonError("ENOTDIR", 400);
-  const entries = [".", "..", ...node.children.keys()];
+  if (!node) {
+    logError("readdir", path, "ENOENT");
+    return jsonError("ENOENT", 404);
+  }
+  if (node.type !== "dir") {
+    logError("readdir", path, "ENOTDIR");
+    return jsonError("ENOTDIR", 400);
+  }
+  const childNames = [...node.children.keys()];
+  const entries = [".", "..", ...childNames];
+  log("readdir", path, `${childNames.length} entries: [${childNames.join(", ")}]`);
   return jsonOk({ entries });
 }
 
 function handleOpen(body: Record<string, unknown>): Response {
   const path = body.path as string;
+  const flags = body.flags as number;
   const node = resolvePath(path);
-  if (!node) return jsonError("ENOENT", 404);
-  if (node.type !== "file") return jsonError("EISDIR", 400);
+  if (!node) {
+    logError("open", path, "ENOENT");
+    return jsonError("ENOENT", 404);
+  }
+  if (node.type !== "file") {
+    logError("open", path, "EISDIR");
+    return jsonError("EISDIR", 400);
+  }
   const fd = nextFd++;
   openFds.set(fd, { path, node });
+  log("open", path, `fd=${fd} flags=${flags} size=${node.content.length}`);
   return jsonOk({ fd });
 }
 
@@ -151,15 +187,20 @@ function handleRead(body: Record<string, unknown>): Response {
   const position = body.position as number;
 
   const entry = openFds.get(fd);
-  if (!entry) return jsonError("EBADF", 400);
+  if (!entry) {
+    logError("read", `fd=${fd}`, "EBADF");
+    return jsonError("EBADF", 400);
+  }
 
-  const { node } = entry;
+  const { node, path } = entry;
   if (position >= node.content.length) {
+    log("read", path, `fd=${fd} pos=${position} EOF (size=${node.content.length})`);
     return jsonOk({ data: "", bytesRead: 0 });
   }
 
   const end = Math.min(position + length, node.content.length);
   const slice = node.content.subarray(position, end);
+  log("read", path, `fd=${fd} pos=${position} len=${length} → ${slice.length}B`);
   return jsonOk({
     data: Buffer.from(slice).toString("base64"),
     bytesRead: slice.length,
@@ -172,12 +213,16 @@ function handleWrite(body: Record<string, unknown>): Response {
   const position = body.position as number;
 
   const entry = openFds.get(fd);
-  if (!entry) return jsonError("EBADF", 400);
+  if (!entry) {
+    logError("write", `fd=${fd}`, "EBADF");
+    return jsonError("EBADF", 400);
+  }
 
-  const { node } = entry;
+  const { node, path } = entry;
   const incoming = Buffer.from(data, "base64");
   const bytesWritten = incoming.length;
   const needed = position + bytesWritten;
+  const oldSize = node.content.length;
 
   // Grow the buffer if writing past current end
   if (needed > node.content.length) {
@@ -188,6 +233,7 @@ function handleWrite(body: Record<string, unknown>): Response {
 
   incoming.copy(node.content, position);
   node.mtime = new Date();
+  log("write", path, `fd=${fd} pos=${position} ${bytesWritten}B written (${oldSize}→${node.content.length}B)`);
   return jsonOk({ bytesWritten });
 }
 
@@ -196,16 +242,23 @@ function handleCreate(body: Record<string, unknown>): Response {
   const mode = (body.mode as number) | 0o100000; // ensure regular file bit
 
   const result = resolveParent(path);
-  if (!result) return jsonError("ENOENT", 404);
+  if (!result) {
+    logError("create", path, "ENOENT (parent)");
+    return jsonError("ENOENT", 404);
+  }
   const { parent, name } = result;
 
-  if (parent.children.has(name)) return jsonError("EEXIST", 400);
+  if (parent.children.has(name)) {
+    logError("create", path, "EEXIST");
+    return jsonError("EEXIST", 400);
+  }
 
   const now = new Date();
+  const timestampLine = `[${now.toISOString()}]\n`;
   const node: FileNode = {
     type: "file",
     mode,
-    content: Buffer.alloc(0),
+    content: Buffer.from(timestampLine),
     ctime: now,
     mtime: now,
     atime: now,
@@ -216,6 +269,7 @@ function handleCreate(body: Record<string, unknown>): Response {
 
   const fd = nextFd++;
   openFds.set(fd, { path, node });
+  log("create", path, `fd=${fd} mode=${mode.toString(8)} (stamped ${timestampLine.trim()})`);
   return jsonOk({ fd });
 }
 
@@ -223,15 +277,26 @@ function handleUnlink(body: Record<string, unknown>): Response {
   const path = body.path as string;
 
   const result = resolveParent(path);
-  if (!result) return jsonError("ENOENT", 404);
+  if (!result) {
+    logError("unlink", path, "ENOENT (parent)");
+    return jsonError("ENOENT", 404);
+  }
   const { parent, name } = result;
 
   const child = parent.children.get(name);
-  if (!child) return jsonError("ENOENT", 404);
-  if (child.type !== "file") return jsonError("EISDIR", 400);
+  if (!child) {
+    logError("unlink", path, "ENOENT");
+    return jsonError("ENOENT", 404);
+  }
+  if (child.type !== "file") {
+    logError("unlink", path, "EISDIR");
+    return jsonError("EISDIR", 400);
+  }
 
+  const size = child.content.length;
   parent.children.delete(name);
   parent.mtime = new Date();
+  log("unlink", path, `removed (was ${size}B)`);
   return jsonOk({});
 }
 
@@ -240,13 +305,22 @@ function handleRename(body: Record<string, unknown>): Response {
   const dest = body.dest as string;
 
   const srcResult = resolveParent(src);
-  if (!srcResult) return jsonError("ENOENT", 404);
+  if (!srcResult) {
+    logError("rename", `${src} → ${dest}`, "ENOENT (src parent)");
+    return jsonError("ENOENT", 404);
+  }
 
   const srcNode = srcResult.parent.children.get(srcResult.name);
-  if (!srcNode) return jsonError("ENOENT", 404);
+  if (!srcNode) {
+    logError("rename", `${src} → ${dest}`, "ENOENT (src)");
+    return jsonError("ENOENT", 404);
+  }
 
   const destResult = resolveParent(dest);
-  if (!destResult) return jsonError("ENOENT", 404);
+  if (!destResult) {
+    logError("rename", `${src} → ${dest}`, "ENOENT (dest parent)");
+    return jsonError("ENOENT", 404);
+  }
 
   srcResult.parent.children.delete(srcResult.name);
   srcResult.parent.mtime = new Date();
@@ -254,6 +328,7 @@ function handleRename(body: Record<string, unknown>): Response {
   destResult.parent.children.set(destResult.name, srcNode);
   destResult.parent.mtime = new Date();
 
+  log("rename", `${src} → ${dest}`, srcNode.type);
   return jsonOk({});
 }
 
@@ -262,10 +337,16 @@ function handleMkdir(body: Record<string, unknown>): Response {
   const mode = (body.mode as number) | 0o40000; // ensure directory bit
 
   const result = resolveParent(path);
-  if (!result) return jsonError("ENOENT", 404);
+  if (!result) {
+    logError("mkdir", path, "ENOENT (parent)");
+    return jsonError("ENOENT", 404);
+  }
   const { parent, name } = result;
 
-  if (parent.children.has(name)) return jsonError("EEXIST", 400);
+  if (parent.children.has(name)) {
+    logError("mkdir", path, "EEXIST");
+    return jsonError("EEXIST", 400);
+  }
 
   const now = new Date();
   parent.children.set(name, {
@@ -278,6 +359,7 @@ function handleMkdir(body: Record<string, unknown>): Response {
   });
   parent.mtime = new Date();
 
+  log("mkdir", path, `mode=${mode.toString(8)}`);
   return jsonOk({});
 }
 
@@ -285,16 +367,29 @@ function handleRmdir(body: Record<string, unknown>): Response {
   const path = body.path as string;
 
   const result = resolveParent(path);
-  if (!result) return jsonError("ENOENT", 404);
+  if (!result) {
+    logError("rmdir", path, "ENOENT (parent)");
+    return jsonError("ENOENT", 404);
+  }
   const { parent, name } = result;
 
   const child = parent.children.get(name);
-  if (!child) return jsonError("ENOENT", 404);
-  if (child.type !== "dir") return jsonError("ENOTDIR", 400);
-  if (child.children.size > 0) return jsonError("ENOTEMPTY", 400);
+  if (!child) {
+    logError("rmdir", path, "ENOENT");
+    return jsonError("ENOENT", 404);
+  }
+  if (child.type !== "dir") {
+    logError("rmdir", path, "ENOTDIR");
+    return jsonError("ENOTDIR", 400);
+  }
+  if (child.children.size > 0) {
+    logError("rmdir", path, `ENOTEMPTY (${child.children.size} children)`);
+    return jsonError("ENOTEMPTY", 400);
+  }
 
   parent.children.delete(name);
   parent.mtime = new Date();
+  log("rmdir", path, "removed");
   return jsonOk({});
 }
 
@@ -303,9 +398,16 @@ function handleTruncate(body: Record<string, unknown>): Response {
   const size = body.size as number;
 
   const node = resolvePath(path);
-  if (!node) return jsonError("ENOENT", 404);
-  if (node.type !== "file") return jsonError("EISDIR", 400);
+  if (!node) {
+    logError("truncate", path, "ENOENT");
+    return jsonError("ENOENT", 404);
+  }
+  if (node.type !== "file") {
+    logError("truncate", path, "EISDIR");
+    return jsonError("EISDIR", 400);
+  }
 
+  const oldSize = node.content.length;
   if (size < node.content.length) {
     node.content = Buffer.from(node.content.subarray(0, size));
   } else if (size > node.content.length) {
@@ -315,12 +417,16 @@ function handleTruncate(body: Record<string, unknown>): Response {
   }
 
   node.mtime = new Date();
+  log("truncate", path, `${oldSize}→${size}B`);
   return jsonOk({});
 }
 
 function handleRelease(body: Record<string, unknown>): Response {
   const fd = body.fd as number;
+  const entry = openFds.get(fd);
+  const path = entry?.path ?? "?";
   openFds.delete(fd);
+  log("release", path, `fd=${fd} (${openFds.size} fds open)`);
   return jsonOk({});
 }
 
@@ -350,29 +456,24 @@ export function startServer(port = 3001): { server: BunServer; stop: () => void 
       const url = new URL(req.url);
 
       if (req.method !== "POST") {
+        log("server", url.pathname, "405 Method Not Allowed");
         return jsonError("Method not allowed", 405);
       }
 
       const match = url.pathname.match(/^\/fuse\/(\w+)$/);
       if (!match) {
+        log("server", url.pathname, "404 Not Found");
         return jsonError("Not found", 404);
       }
 
       const op = match[1];
       const handler = handlers[op];
       if (!handler) {
+        logError("server", op, "ENOSYS (unknown op)");
         return jsonError("ENOSYS", 400);
       }
 
       const body = (await req.json()) as Record<string, unknown>;
-
-      // Log the operation
-      if (op === "rename") {
-        console.log(`[${op}] ${body.src} → ${body.dest}`);
-      } else {
-        console.log(`[${op}] ${body.path ?? ""}`);
-      }
-
       return handler(body);
     },
   });
