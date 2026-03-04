@@ -11,10 +11,10 @@ import { fromHex, toHex } from "@mysten/sui/utils";
 import { SealClient, SessionKey } from "@mysten/seal";
 
 import {
-  createList,
-  add,
+  register,
+  grantAccess,
   sealApprove,
-} from "../src/generated/walrus_drive/walrus_drive.js";
+} from "../src/generated/walrus_drive/drive.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -122,7 +122,7 @@ describe("walrus-drive", () => {
 
   it("should create an allowlist for admin", async () => {
     const tx = new Transaction();
-    createList({
+    register({
       package: packageId,
       arguments: { registry: registryId },
     })(tx);
@@ -140,7 +140,7 @@ describe("walrus-drive", () => {
 
   it("should add user to admin allowlist", async () => {
     const tx = new Transaction();
-    add({
+    grantAccess({
       package: packageId,
       arguments: { registry: registryId, addr: userAddress },
     })(tx);
@@ -161,7 +161,7 @@ describe("walrus-drive", () => {
 
   it("should encrypt hello.txt with Seal", async () => {
     // Build Seal ID: registryId bytes (32) + admin address bytes (32)
-    // Matches check_policy at walrus_drive.move:46-71
+    // Matches check_policy in drive.move
     const registryBytes = fromHex(registryId.replace(/^0x/, ""));
     const ownerBytes = fromHex(adminAddress.replace(/^0x/, ""));
     sealId = new Uint8Array(64);
