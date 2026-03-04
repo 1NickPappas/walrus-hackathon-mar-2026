@@ -26,7 +26,7 @@ walrus-hackathon-mar-2026/
 ├── CLAUDE.md                          # ← you are here
 ├── contract/                          # Move smart contract (Sui)
 │   ├── Move.toml
-│   └── sources/walrus_drive.move      # Seal registry: allowlist-based encrypt/decrypt policy
+│   └── sources/walrus_drive.move      # drive module: allowlist + manifest sharing via Seal
 ├── app/                               # TypeScript FUSE daemon
 │   ├── package.json                   # Scripts: start, build, codegen
 │   ├── tsconfig.json                  # Bun-compatible: module=preserve, bundler resolution
