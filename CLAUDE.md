@@ -13,8 +13,8 @@ Walrus Drive is a decentralized Dropbox for macOS. Files dropped into a FUSE-mou
 
 ## Runtime & tooling
 
-- **Runtime:** Bun (not Node). Use `bun run`, `bun install`, etc.
-- **Language:** TypeScript — Bun runs `.ts` directly, no compile step needed
+- **Runtime:** Two-process model — Bun runs the HTTP server, Node (via `tsx`) runs the FUSE client. See Architecture section below.
+- **Language:** TypeScript — Bun runs `.ts` directly, `tsx` runs `.ts` under Node
 - **Type checking:** `bun run --bun tsc --noEmit` (tsc is type-checker only, `noEmit: true`)
 - **Package manager:** Bun (`bun.lock`, not `package-lock.json`)
 - **Module resolution:** `"moduleResolution": "bundler"` — use `.ts` extensions in imports
@@ -31,7 +31,8 @@ walrus-hackathon-mar-2026/
 │   ├── package.json                   # Scripts: start, build, codegen
 │   ├── tsconfig.json                  # Bun-compatible: module=preserve, bundler resolution
 │   └── src/
-│       ├── index.ts                   # Entry point — starts server, then mounts FUSE
+│       ├── index.ts                   # Entry point — starts Bun server, spawns FUSE via tsx
+│       ├── fuse-mount.ts             # ✅ Standalone FUSE entry point (runs under Node/tsx)
 │       ├── server.ts                  # ✅ Bun.serve() HTTP server — in-memory FS, 12 FUSE ops
 │       ├── fuse.ts                    # ✅ FUSE HTTP thin client (12 ops → localhost:3001)
 │       ├── types/fuse-native.d.ts     # ✅ TypeScript declarations for fuse-native
@@ -51,20 +52,23 @@ walrus-hackathon-mar-2026/
 
 Legend: ✅ = implemented, 🔲 = stub/TODO
 
-## Architecture: FUSE ↔ HTTP server split
+## Architecture: Two-process FUSE ↔ HTTP server split
 
-The FUSE layer is a **thin client** that delegates all operations to a local HTTP server:
+The app runs as **two processes** connected via HTTP:
 
 ```
-┌──────────────┐   HTTP POST (JSON)   ┌──────────────────┐
-│  fuse.ts     │ ──────────────────── │  HTTP server     │
-│  (FUSE ops)  │  localhost:3001      │  (Bun.serve)     │
-│              │ ◄──────────────────── │  db + walrus +   │
-│  kernel ↔ JS │   JSON responses     │  seal + sui      │
-└──────────────┘                      └──────────────────┘
+┌─────────────────────┐   HTTP POST (JSON)   ┌──────────────────┐
+│  fuse-mount.ts      │ ──────────────────── │  HTTP server     │
+│  (Node via tsx)     │  localhost:3001      │  (Bun.serve)     │
+│                     │ ◄──────────────────── │  db + walrus +   │
+│  kernel ↔ fuse.ts   │   JSON responses     │  seal + sui      │
+└─────────────────────┘                      └──────────────────┘
+     Process 2 (Node)                            Process 1 (Bun)
 ```
 
-**Why this split:** Makes the FUSE layer independently testable (mock the HTTP server), and separates filesystem concerns from storage/encryption/chain logic.
+**Why two processes:** `fuse-native` is a native Node addon that relies on `libuv` internals (semaphores, threading). Bun doesn't fully support these — especially on Linux ARM64 where no prebuilt binaries exist. Running the FUSE client under Node (via `tsx`) gives full native addon support. The HTTP split makes this a clean process boundary.
+
+**How it works:** `index.ts` (Bun) starts the HTTP server, then spawns `fuse-mount.ts` as a child process under `npx tsx`. Signals (SIGINT/SIGTERM) are forwarded to the child for graceful FUSE unmount.
 
 ### HTTP API contract
 
@@ -101,18 +105,23 @@ Key functions: `create_list`, `add`, `remove`, `seal_approve`.
 - **Graceful unmount:** SIGINT/SIGTERM handlers call `fuse.unmount()` with `diskutil unmount force` fallback.
 - **Type declarations:** `fuse-native` has no built-in types. We use namespace merging in `types/fuse-native.d.ts` so `Fuse.FuseOperations` works alongside `export = Fuse`.
 - **No `better-sqlite3`:** Removed in favor of `bun:sqlite` (built into Bun runtime). `db.ts` is still a stub.
+- **Two-process model:** `index.ts` spawns `fuse-mount.ts` via `npx tsx` (Node). Signals are forwarded for graceful cleanup. Each half can be run independently with `start:server` / `start:fuse` for debugging.
 
 ## Commands
 
 ```bash
 cd app
-bun install                    # install deps
-bun run start                  # mount FUSE at ./mnt (or pass custom path)
+bun install                    # install deps (includes tsx for Node FUSE process)
+bun run start                  # start server (Bun) + FUSE (Node/tsx) at ./mnt
 bun run start /path/to/mount   # mount at custom path
+bun run start:server           # run HTTP server only (Bun)
+bun run start:fuse             # run FUSE client only (Node/tsx) — needs server running
 bun run build                  # type-check only (no JS output)
 bun run codegen                # generate TS bindings from Move contract
 bun run test                   # run integration tests (requires .env with keys)
 ```
+
+**Linux ARM64 note:** Ensure `libfuse-dev` (or `fuse3`) is installed for `fuse-native` to compile its native addon. Node must be available (for `tsx`).
 
 ## Testing
 

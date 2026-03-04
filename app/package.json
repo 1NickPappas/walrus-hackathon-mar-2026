@@ -7,6 +7,8 @@
     "build": "bun run --bun tsc",
     "codegen": "sui-ts-codegen generate",
     "start": "bun run src/index.ts",
+    "start:server": "bun run src/server.ts",
+    "start:fuse": "npx tsx src/fuse-mount.ts",
     "test": "NODE_OPTIONS='--experimental-vm-modules' jest --runInBand"
   },
   "dependencies": {
@@ -17,6 +19,7 @@
   },
   "devDependencies": {
     "@mysten/codegen": "^0.8.2",
+    "tsx": "^4.0.0",
     "@types/better-sqlite3": "^7.6.0",
     "@types/bun": "^1.2.0",
     "@types/jest": "^30.0.0",
