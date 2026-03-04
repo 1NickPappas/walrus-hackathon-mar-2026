@@ -1,41 +1,64 @@
-module walrus_drive::walrus_drive {
+module walrus_drive::drive {
     use sui::vec_set::{Self, VecSet};
     use sui::table::{Self, Table};
+    use std::string::String;
 
     /// Single shared registry mapping owners to their allowlists.
     /// The UID bytes serve as the Seal encryption namespace prefix.
+    /// `manifests` maps each owner to a Walrus blob ID containing their shared file listing.
     public struct Registry has key {
         id: UID,
-        lists: Table<address, VecSet<address>>,
+        allowlists: Table<address, VecSet<address>>,
+        manifests: Table<address, String>,
     }
 
     /// Create the registry on publish.
     fun init(ctx: &mut TxContext) {
         transfer::share_object(Registry {
             id: object::new(ctx),
-            lists: table::new(ctx),
+            allowlists: table::new(ctx),
+            manifests: table::new(ctx),
         });
     }
 
-    /// Create an allowlist entry for the caller, auto-adding themselves.
-    public fun create_list(registry: &mut Registry, ctx: &TxContext) {
+    /// Register the caller as a drive owner, auto-adding themselves to their allowlist.
+    public fun register(registry: &mut Registry, ctx: &TxContext) {
         let owner = ctx.sender();
-        assert!(!registry.lists.contains(owner));
+        assert!(!registry.allowlists.contains(owner));
         let mut addresses = vec_set::empty<address>();
         addresses.insert(owner);
-        registry.lists.add(owner, addresses);
+        registry.allowlists.add(owner, addresses);
     }
 
-    /// Owner adds an address to their allowlist.
-    public fun add(registry: &mut Registry, addr: address, ctx: &TxContext) {
-        let list = &mut registry.lists[ctx.sender()];
-        list.insert(addr);
+    /// Grant an address access to the caller's files.
+    public fun grant_access(registry: &mut Registry, addr: address, ctx: &TxContext) {
+        let allowlist = &mut registry.allowlists[ctx.sender()];
+        allowlist.insert(addr);
     }
 
-    /// Owner removes an address from their allowlist.
-    public fun remove(registry: &mut Registry, addr: address, ctx: &TxContext) {
-        let list = &mut registry.lists[ctx.sender()];
-        list.remove(&addr);
+    /// Revoke an address's access to the caller's files.
+    public fun revoke_access(registry: &mut Registry, addr: address, ctx: &TxContext) {
+        let allowlist = &mut registry.allowlists[ctx.sender()];
+        allowlist.remove(&addr);
+    }
+
+    /// Publish or update the caller's manifest blob ID (points to a Walrus blob
+    /// containing a list of shared file references).
+    public fun publish_manifest(registry: &mut Registry, blob_id: String, ctx: &TxContext) {
+        let owner = ctx.sender();
+        if (registry.manifests.contains(owner)) {
+            *&mut registry.manifests[owner] = blob_id;
+        } else {
+            registry.manifests.add(owner, blob_id);
+        };
+    }
+
+    /// Unpublish the caller's manifest (stops sharing).
+    public fun unpublish_manifest(registry: &mut Registry, ctx: &TxContext) {
+        let owner = ctx.sender();
+        if (registry.manifests.contains(owner)) {
+            let _blob_id = registry.manifests.remove(owner);
+        };
     }
 
     /// Seal callback: verifies namespace prefix, extracts owner, checks membership.
@@ -65,8 +88,8 @@ module walrus_drive::walrus_drive {
         };
         let owner = sui::address::from_bytes(owner_bytes);
 
-        // Verify owner has a list and caller is in it
-        assert!(registry.lists.contains(owner));
-        assert!(registry.lists[owner].contains(&caller));
+        // Verify owner has an allowlist and caller is in it
+        assert!(registry.allowlists.contains(owner));
+        assert!(registry.allowlists[owner].contains(&caller));
     }
 }
