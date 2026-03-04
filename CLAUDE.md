@@ -26,7 +26,7 @@ walrus-hackathon-mar-2026/
 ├── CLAUDE.md                          # ← you are here
 ├── contract/                          # Move smart contract (Sui)
 │   ├── Move.toml
-│   └── sources/walrus_drive.move      # Seal registry: allowlist-based encrypt/decrypt policy
+│   └── sources/walrus_drive.move      # drive module: allowlist + manifest sharing via Seal
 ├── app/                               # TypeScript FUSE daemon
 │   ├── package.json                   # Scripts: start, build, codegen
 │   ├── tsconfig.json                  # Bun-compatible: module=preserve, bundler resolution
@@ -91,11 +91,34 @@ RPC-style: `POST http://localhost:3001/fuse/{operation}` with JSON bodies.
 
 **Errors:** Non-200 → `{ "error": "ENOENT" }`. Client maps string → `Fuse.ENOENT` etc., fallback `Fuse.EIO`.
 
-## Smart contract (Seal registry)
+## Smart contract (`walrus_drive::drive`)
 
-`contract/sources/walrus_drive.move` — A shared `Registry` object where each user has an allowlist of addresses. The `seal_approve` entry function is the Seal callback: it verifies the namespace prefix matches the registry ID, extracts the owner address, and checks the caller is on the owner's list.
+`contract/sources/walrus_drive.move` — A single shared `Registry` object with two tables:
 
-Key functions: `create_list`, `add`, `remove`, `seal_approve`.
+- **`allowlists`**: `Table<address, VecSet<address>>` — who can decrypt each owner's files
+- **`manifests`**: `Table<address, String>` — each owner's Walrus blob ID pointing to a JSON manifest of shared files
+
+Key functions: `register`, `grant_access`, `revoke_access`, `publish_manifest`, `unpublish_manifest`, `seal_approve`.
+
+## Sharing flow
+
+### Alice (owner) shares files:
+
+1. Files already stored via FUSE (encrypted → Walrus → tracked locally)
+2. Calls `grant_access(registry, bob_address)` — adds Bob to her allowlist
+3. Creates a manifest JSON: `[{name: "report.pdf", blobId: "abc", size: 1024}, ...]`
+4. Uploads manifest to Walrus → gets manifest blob ID
+5. Calls `publish_manifest(registry, manifest_blob_id)` on-chain
+
+### Bob (recipient) accesses shared files via web UI:
+
+1. Connects wallet
+2. Queries the shared Registry — finds all owners who have Bob on their allowlist
+3. For each owner, reads their manifest blob ID
+4. Downloads manifest from Walrus → gets the file listing
+5. Clicks a file → downloads that blob from Walrus → Seal decrypts → Bob gets plaintext
+
+**Key design decision:** Bob does NOT download shared files into his FUSE mount — that would trigger the write flow and re-upload to Walrus. Shared files are accessed read-only via a separate web UI.
 
 ## Key patterns & gotchas
 
