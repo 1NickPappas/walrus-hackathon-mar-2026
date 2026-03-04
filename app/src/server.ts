@@ -1,12 +1,26 @@
 /**
  * HTTP server implementing the FUSE RPC contract against an in-memory file tree.
- * Placeholder until Walrus/Seal/Sui integration replaces the storage layer.
+ * On file release: encrypt (Seal) → upload (Walrus) → track (SQLite).
  *
  * Every operation is logged to console: [op] /path
  */
 
+import type { Keypair } from "@mysten/sui/cryptography";
+import { encrypt } from "./seal.ts";
+import { uploadBlob } from "./walrus.ts";
+import { insertBlob } from "./db.ts";
+
 // Bun's Server type is generic; we don't use WebSockets so `unknown` suffices.
 type BunServer = ReturnType<typeof Bun.serve>;
+
+// ── Pipeline state (set via initServerPipeline) ─────────────
+
+let signer: Keypair | null = null;
+
+export function initServerPipeline(keypair: Keypair): void {
+  signer = keypair;
+  console.log("[server] pipeline ready (encrypt → upload → SQLite)");
+}
 
 // ── In-memory filesystem types ──────────────────────────────
 
@@ -132,7 +146,7 @@ function logError(op: string, detail: string, error: string): void {
 
 // ── Operation handlers ──────────────────────────────────────
 
-type HandlerFn = (body: Record<string, unknown>) => Response;
+type HandlerFn = (body: Record<string, unknown>) => Response | Promise<Response>;
 
 function handleGetattr(body: Record<string, unknown>): Response {
   const path = body.path as string;
@@ -248,20 +262,12 @@ function handleCreate(body: Record<string, unknown>): Response {
   }
   const { parent, name } = result;
 
-  // Prepend timestamp to filename: test.txt → 2026-03-04T12-34-56_test.txt
-  const now = new Date();
-  const stamp = now.toISOString().slice(0, 19).replace(/:/g, "-"); // 2026-03-04T12-34-56
-  const dotIdx = name.lastIndexOf(".");
-  const stampedName =
-    dotIdx > 0
-      ? `${stamp}_${name.slice(0, dotIdx)}${name.slice(dotIdx)}`
-      : `${stamp}_${name}`;
-
-  if (parent.children.has(stampedName)) {
-    logError("create", path, `EEXIST (as ${stampedName})`);
+  if (parent.children.has(name)) {
+    logError("create", path, "EEXIST");
     return jsonError("EEXIST", 400);
   }
 
+  const now = new Date();
   const node: FileNode = {
     type: "file",
     mode,
@@ -271,13 +277,12 @@ function handleCreate(body: Record<string, unknown>): Response {
     atime: now,
   };
 
-  parent.children.set(stampedName, node);
+  parent.children.set(name, node);
   parent.mtime = new Date();
 
-  const stampedPath = path.slice(0, path.length - name.length) + stampedName;
   const fd = nextFd++;
-  openFds.set(fd, { path: stampedPath, node });
-  log("create", path, `→ ${stampedName} fd=${fd} mode=${mode.toString(8)}`);
+  openFds.set(fd, { path, node });
+  log("create", path, `fd=${fd} mode=${mode.toString(8)}`);
   return jsonOk({ fd });
 }
 
@@ -429,11 +434,29 @@ function handleTruncate(body: Record<string, unknown>): Response {
   return jsonOk({});
 }
 
-function handleRelease(body: Record<string, unknown>): Response {
+async function handleRelease(body: Record<string, unknown>): Promise<Response> {
   const fd = body.fd as number;
   const entry = openFds.get(fd);
   const path = entry?.path ?? "?";
   openFds.delete(fd);
+
+  // Encrypt → Upload → SQLite pipeline for files with content
+  if (entry && entry.node.content.length > 0 && signer) {
+    const fileName = path.split("/").pop() ?? path;
+    try {
+      const encrypted = await encrypt(entry.node.content);
+      log("release", path, `encrypted ${entry.node.content.length}B → ${encrypted.length}B`);
+
+      const blobId = await uploadBlob(encrypted, signer);
+      log("release", path, `uploaded → blobId=${blobId}`);
+
+      insertBlob(blobId, fileName);
+      log("release", path, `blobId=${blobId} (encrypted, uploaded, tracked)`);
+    } catch (err) {
+      logError("release", path, `pipeline failed: ${err}`);
+    }
+  }
+
   log("release", path, `fd=${fd} (${openFds.size} fds open)`);
   return jsonOk({});
 }

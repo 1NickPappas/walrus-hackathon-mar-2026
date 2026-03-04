@@ -8,6 +8,10 @@ dist/
 *.db
 *.db-journal
 *.db-wal
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+.walrus-drive.sqlite*
 
 # Mount point
 mnt/
