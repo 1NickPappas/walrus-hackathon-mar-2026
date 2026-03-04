@@ -7,16 +7,19 @@ import { SuiGrpcClient } from "@mysten/sui/grpc";
 import { Transaction } from "@mysten/sui/transactions";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { decodeSuiPrivateKey } from "@mysten/sui/cryptography";
-import { fromHex, toHex } from "@mysten/sui/utils";
 import { SealClient, SessionKey } from "@mysten/seal";
 
 import {
   register,
   grantAccess,
   publishManifest,
-  sealApprove,
 } from "../src/generated/walrus_drive/drive.js";
 import { initWalrus, uploadBlob, downloadBlob } from "../src/walrus.ts";
+import { encrypt, decrypt } from "../src/seal.ts";
+import {
+  findSharedWithMe,
+  getManifestBlobId,
+} from "../src/sharing.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -46,8 +49,9 @@ describe("walrus-drive", () => {
   let packageId: string;
   let registryId: string;
   let blobId: string;
-  let sealId: Uint8Array;
   let encryptedBytes: Uint8Array;
+  let encryptedBlobId: string;
+  let manifestBlobId: string;
 
   beforeAll(() => {
     const network = process.env.NETWORK ?? "testnet";
@@ -174,22 +178,14 @@ describe("walrus-drive", () => {
   });
 
   it("should encrypt hello.txt with Seal", async () => {
-    // Build Seal ID: registryId bytes (32) + admin address bytes (32)
-    // Matches check_policy in drive.move
-    const registryBytes = fromHex(registryId.replace(/^0x/, ""));
-    const ownerBytes = fromHex(adminAddress.replace(/^0x/, ""));
-    sealId = new Uint8Array(64);
-    sealId.set(registryBytes, 0);
-    sealId.set(ownerBytes, 32);
-
-    const { encryptedObject } = await sealClient.encrypt({
-      threshold: 2,
+    encryptedBytes = await encrypt({
+      sealClient,
       packageId,
-      id: toHex(sealId),
+      registryId,
+      ownerAddress: adminAddress,
       data: plaintext,
     });
 
-    encryptedBytes = encryptedObject;
     expect(encryptedBytes.length).toBeGreaterThan(plaintext.length);
     console.log(
       `Encrypted: ${plaintext.length} bytes -> ${encryptedBytes.length} bytes`,
@@ -198,7 +194,7 @@ describe("walrus-drive", () => {
 
   it("should upload encrypted blob and publish manifest", async () => {
     // Upload encrypted bytes to Walrus
-    const encryptedBlobId = await uploadBlob(encryptedBytes, adminKeypair, { epochs: 3 });
+    encryptedBlobId = await uploadBlob(encryptedBytes, adminKeypair, { epochs: 3 });
     expect(encryptedBlobId).toBeTruthy();
     console.log("Encrypted Blob ID:", encryptedBlobId);
 
@@ -221,7 +217,6 @@ describe("walrus-drive", () => {
   });
 
   it("should decrypt as authorized user", async () => {
-    // Create session key for the user
     const sessionKey = await SessionKey.create({
       address: userAddress,
       packageId,
@@ -230,31 +225,61 @@ describe("walrus-drive", () => {
       suiClient: client,
     });
 
-    // Build transaction bytes with seal_approve call
-    const tx = new Transaction();
-    sealApprove({
-      package: packageId,
-      arguments: {
-        id: Array.from(sealId),
-        registry: registryId,
-      },
-    })(tx);
-    const txBytes = await tx.build({
-      client,
-      onlyTransactionKind: true,
-    });
-
-    // Decrypt
-    const decryptedBytes = await sealClient.decrypt({
-      data: encryptedBytes,
+    const decryptedBytes = await decrypt({
+      sealClient,
       sessionKey,
-      txBytes,
+      packageId,
+      registryId,
+      ownerAddress: adminAddress,
+      suiClient: client,
+      data: encryptedBytes,
     });
 
     expect(decryptedBytes).toEqual(plaintext);
     console.log(
       "Decrypted successfully:",
       new TextDecoder().decode(decryptedBytes),
+    );
+  });
+
+  it("should let Bob discover shared files from the registry", async () => {
+    // Bob queries: who shared with me?
+    const owners = await findSharedWithMe(client, registryId, userAddress);
+    expect(owners).toContain(adminAddress);
+    console.log("Owners who shared with Bob:", owners);
+
+    // Read admin's manifest blob ID from chain
+    manifestBlobId = (await getManifestBlobId(client, registryId, adminAddress))!;
+    expect(manifestBlobId).toBe(encryptedBlobId);
+    console.log("Admin's manifest blob ID:", manifestBlobId);
+  });
+
+  it("should let Bob download and decrypt a shared file end-to-end", async () => {
+    // Bob creates a session key
+    const sessionKey = await SessionKey.create({
+      address: userAddress,
+      packageId,
+      ttlMin: 10,
+      signer: userKeypair,
+      suiClient: client,
+    });
+
+    // Bob downloads the encrypted blob from Walrus and decrypts via Seal
+    const encryptedData = await downloadBlob(manifestBlobId);
+    const decrypted = await decrypt({
+      sealClient,
+      sessionKey,
+      packageId,
+      registryId,
+      ownerAddress: adminAddress,
+      suiClient: client,
+      data: encryptedData,
+    });
+
+    expect(decrypted).toEqual(plaintext);
+    console.log(
+      "Bob decrypted shared file:",
+      new TextDecoder().decode(decrypted),
     );
   });
 });
