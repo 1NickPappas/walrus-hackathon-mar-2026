@@ -39,6 +39,12 @@ walrus-hackathon-mar-2026/
 │       ├── walrus.ts                  # 🔲 Stub — Walrus blob upload/download
 │       ├── seal.ts                    # 🔲 Stub — Seal encrypt/decrypt
 │       └── sui.ts                     # 🔲 Stub — Sui on-chain file metadata
+│   ├── test/
+│   │   └── walrus-drive.test.ts       # ✅ Integration tests: publish, allowlist, encrypt, decrypt
+│   ├── test_assets/
+│   │   └── hello.txt                  # Test fixture for encrypt/decrypt
+│   ├── jest.config.ts                 # Jest config (ts-jest, ESM)
+│   └── .env.example                   # Required env vars for tests
 ├── fuse-plan.md                       # Research notes on FUSE + macOS + TypeScript
 └── .gitignore
 ```
@@ -105,7 +111,26 @@ bun run start                  # mount FUSE at ./mnt (or pass custom path)
 bun run start /path/to/mount   # mount at custom path
 bun run build                  # type-check only (no JS output)
 bun run codegen                # generate TS bindings from Move contract
+bun run test                   # run integration tests (requires .env with keys)
 ```
+
+## Testing
+
+Integration tests in `app/test/walrus-drive.test.ts` run against **testnet**. They require a `.env` file (see `.env.example`):
+
+- `ADMIN_PRIVATE_KEY` / `USER_PRIVATE_KEY` — Sui private keys (`suiprivkey1q...`)
+- `NETWORK` — defaults to `testnet`
+- `RPC_URL` — defaults to `https://fullnode.testnet.sui.io:443`
+
+The test suite is sequential (each test depends on the previous):
+
+1. **Publish** — compiles Move via `sui move build --dump-bytecode-as-base64`, publishes via SDK `tx.publish()`
+2. **Create allowlist** — admin creates a Seal allowlist in the registry
+3. **Add user** — admin adds user address to allowlist
+4. **Encrypt** — encrypts `hello.txt` via Seal with threshold encryption
+5. **Decrypt** — user decrypts as an authorized allowlist member
+
+**Note:** Publishing uses the TypeScript SDK (not `sui client publish`), so no CLI env/key configuration is needed — only `sui move build` is called for Move compilation.
 
 ## What's next (TODO)
 
