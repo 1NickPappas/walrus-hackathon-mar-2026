@@ -33,12 +33,12 @@ walrus-hackathon-mar-2026/
 │   └── src/
 │       ├── index.ts                   # Entry point — starts Bun server, spawns FUSE via tsx
 │       ├── fuse-mount.ts             # ✅ Standalone FUSE entry point (runs under Node/tsx)
-│       ├── server.ts                  # ✅ Bun.serve() HTTP server — in-memory FS, 12 FUSE ops
+│       ├── server.ts                  # ✅ Bun.serve() HTTP server — in-memory FS, 12 FUSE ops, Walrus upload on release
 │       ├── fuse.ts                    # ✅ FUSE HTTP thin client (12 ops → localhost:3001)
 │       ├── types/fuse-native.d.ts     # ✅ TypeScript declarations for fuse-native
-│       ├── db.ts                      # 🔲 Stub — SQLite local cache (will use bun:sqlite)
+│       ├── db.ts                      # ✅ SQLite local cache via bun:sqlite (filename → blobId)
 │       ├── walrus.ts                  # ✅ Walrus blob upload/download via @mysten/walrus SDK
-│       ├── seal.ts                    # 🔲 Stub — Seal encrypt/decrypt
+│       ├── seal.ts                    # ✅ Seal encrypt (decrypt stub — needs SessionKey)
 │       └── sui.ts                     # 🔲 Stub — Sui on-chain file metadata
 │   ├── test/
 │   │   └── walrus-drive.test.ts       # ✅ Integration tests: publish, allowlist, walrus, encrypt, decrypt
@@ -129,7 +129,7 @@ Key functions: `register`, `grant_access`, `revoke_access`, `publish_manifest`, 
 - **Type declarations:** `fuse-native` has no built-in types. We use namespace merging in `types/fuse-native.d.ts` so `Fuse.FuseOperations` works alongside `export = Fuse`.
 - **No `better-sqlite3`:** Removed in favor of `bun:sqlite` (built into Bun runtime). `db.ts` is still a stub.
 - **Two-process model:** `index.ts` spawns `fuse-mount.ts` via `npx tsx` (Node). Signals are forwarded for graceful cleanup. Each half can be run independently with `start:server` / `start:fuse` for debugging.
-- **Filename timestamp prefix (temporary):** `handleCreate` in `server.ts` prepends an ISO timestamp to filenames (`test.txt` → `2026-03-04T12-34-56_test.txt`). This is **for testing only** — remove it when integrating Walrus and Sui.
+- **Internal files** (`.walrusfs.db`, `.walrusfs.db-wal`, `.walrusfs.db-shm`, `.DS_Store`) are excluded from Walrus upload — they only exist locally in the in-memory FS.
 - **Walrus SDK uses client extension pattern:** `suiClient.$extend(walrus())` — not a standalone constructor. Methods accessed via `client.walrus.writeBlob()` / `client.walrus.readBlob()`. Uploads require WAL tokens (not SUI) for storage fees.
 
 ## Commands
@@ -153,8 +153,11 @@ bun run test                   # run integration tests (requires .env with keys)
 Integration tests in `app/test/walrus-drive.test.ts` run against **testnet**. They require a `.env` file (see `.env.example`):
 
 - `ADMIN_PRIVATE_KEY` / `USER_PRIVATE_KEY` — Sui private keys (`suiprivkey1q...`)
+- `PACKAGE_ID` — published Move package ID (`0x...`)
+- `REGISTRY_ID` — shared Registry object ID (`0x...`)
 - `NETWORK` — defaults to `testnet`
 - `RPC_URL` — defaults to `https://fullnode.testnet.sui.io:443`
+- `DB_PATH` — SQLite database path (defaults to `./data/walrus.db`)
 
 The test suite is sequential (each test depends on the previous):
 
@@ -171,8 +174,8 @@ The test suite is sequential (each test depends on the previous):
 ## What's next (TODO)
 
 1. ~~**HTTP server** (`app/src/server.ts`)~~ — ✅ Implemented with in-memory file tree (placeholder until Walrus/Seal/Sui replace it)
-2. **SQLite cache** (`app/src/db.ts`) — file tree metadata using `bun:sqlite`
+2. ~~**SQLite cache** (`app/src/db.ts`)~~ — ✅ Implemented with `bun:sqlite` (filename → blobId tracking)
 3. ~~**Walrus client** (`app/src/walrus.ts`)~~ — ✅ Implemented with `@mysten/walrus` SDK (upload/download blobs)
-4. **Seal integration** (`app/src/seal.ts`) — encrypt/decrypt using on-chain policy
+4. ~~**Seal integration** (`app/src/seal.ts`)~~ — ✅ Encrypt implemented (decrypt stub — needs SessionKey for read flow)
 5. **Sui client** (`app/src/sui.ts`) — create/update/delete FileEntry objects on-chain
 6. **Replace `sui move build` CLI with SDK** — test publish step uses `execSync("sui move build --dump-bytecode-as-base64")` which requires the Sui CLI binary. Replace with SDK-based Move compilation to remove CLI dependency and enable Dockerization

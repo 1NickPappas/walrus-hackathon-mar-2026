@@ -1,12 +1,49 @@
 /**
  * HTTP server implementing the FUSE RPC contract against an in-memory file tree.
- * Placeholder until Walrus/Seal/Sui integration replaces the storage layer.
+ * On file close (release), encrypts via Seal, uploads to Walrus, and tracks in SQLite.
  *
  * Every operation is logged to console: [op] /path
  */
 
+import { SuiGrpcClient } from "@mysten/sui/grpc";
+import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
+import { decodeSuiPrivateKey } from "@mysten/sui/cryptography";
+import { SealClient } from "@mysten/seal";
+
+import { initDb, upsertFile } from "./db.ts";
+import { initWalrus, uploadBlob } from "./walrus.ts";
+import { initSeal, encrypt } from "./seal.ts";
+
 // Bun's Server type is generic; we don't use WebSockets so `unknown` suffices.
 type BunServer = ReturnType<typeof Bun.serve>;
+
+// ── Environment ─────────────────────────────────────────────
+
+export let packageId: string;
+let registryId: string;
+let adminKeypair: Ed25519Keypair;
+
+// ── Internal files (excluded from Walrus upload) ────────────
+
+const INTERNAL_FILES = new Set([".walrusfs.db", ".walrusfs.db-wal", ".walrusfs.db-shm", ".DS_Store"]);
+
+function isInternalFile(path: string): boolean {
+  const name = path.split("/").pop() ?? "";
+  return INTERNAL_FILES.has(name);
+}
+
+// ── Testnet Seal key servers ────────────────────────────────
+
+const TESTNET_KEY_SERVERS = [
+  {
+    objectId: "0x73d05d62c18d9374e3ea529e8e0ed6161da1a141a94d3f76ae3fe4e99356db75",
+    weight: 1,
+  },
+  {
+    objectId: "0xf5d14a81a982144ae441cd7d64b09027f116a468bd36e7eca494f750591623c8",
+    weight: 1,
+  },
+];
 
 // ── In-memory filesystem types ──────────────────────────────
 
@@ -248,20 +285,12 @@ function handleCreate(body: Record<string, unknown>): Response {
   }
   const { parent, name } = result;
 
-  // Prepend timestamp to filename: test.txt → 2026-03-04T12-34-56_test.txt
-  const now = new Date();
-  const stamp = now.toISOString().slice(0, 19).replace(/:/g, "-"); // 2026-03-04T12-34-56
-  const dotIdx = name.lastIndexOf(".");
-  const stampedName =
-    dotIdx > 0
-      ? `${stamp}_${name.slice(0, dotIdx)}${name.slice(dotIdx)}`
-      : `${stamp}_${name}`;
-
-  if (parent.children.has(stampedName)) {
-    logError("create", path, `EEXIST (as ${stampedName})`);
+  if (parent.children.has(name)) {
+    logError("create", path, "EEXIST");
     return jsonError("EEXIST", 400);
   }
 
+  const now = new Date();
   const node: FileNode = {
     type: "file",
     mode,
@@ -271,13 +300,12 @@ function handleCreate(body: Record<string, unknown>): Response {
     atime: now,
   };
 
-  parent.children.set(stampedName, node);
+  parent.children.set(name, node);
   parent.mtime = new Date();
 
-  const stampedPath = path.slice(0, path.length - name.length) + stampedName;
   const fd = nextFd++;
-  openFds.set(fd, { path: stampedPath, node });
-  log("create", path, `→ ${stampedName} fd=${fd} mode=${mode.toString(8)}`);
+  openFds.set(fd, { path, node });
+  log("create", path, `fd=${fd} mode=${mode.toString(8)}`);
   return jsonOk({ fd });
 }
 
@@ -433,9 +461,31 @@ function handleRelease(body: Record<string, unknown>): Response {
   const fd = body.fd as number;
   const entry = openFds.get(fd);
   const path = entry?.path ?? "?";
+  const node = entry?.node;
   openFds.delete(fd);
   log("release", path, `fd=${fd} (${openFds.size} fds open)`);
+
+  // Fire-and-forget: encrypt → upload → DB insert
+  if (node && node.content.length > 0 && !isInternalFile(path)) {
+    const filename = path.split("/").pop()!;
+    const snapshot = Buffer.from(node.content);
+    const size = snapshot.length;
+    uploadFileToWalrus(filename, snapshot, size).catch((err) =>
+      logError("upload", path, String(err)),
+    );
+  }
+
   return jsonOk({});
+}
+
+async function uploadFileToWalrus(filename: string, content: Buffer, size: number): Promise<void> {
+  log("upload", filename, "encrypting...");
+  const encrypted = await encrypt(new Uint8Array(content));
+  log("upload", filename, `encrypted (${content.length}→${encrypted.length}B), uploading to Walrus...`);
+  const blobId = await uploadBlob(encrypted, adminKeypair, { epochs: 3 });
+  log("upload", filename, `uploaded, blobId=${blobId}`);
+  upsertFile(filename, blobId, size);
+  log("upload", filename, `tracked in DB`);
 }
 
 // ── Handler dispatch table ──────────────────────────────────
@@ -458,6 +508,46 @@ const handlers: Record<string, HandlerFn> = {
 // ── Server entrypoint ───────────────────────────────────────
 
 export function startServer(port = 3001): { server: BunServer; stop: () => void } {
+  // ── Required env vars ──
+  const id = process.env.PACKAGE_ID;
+  if (!id) throw new Error("PACKAGE_ID is required in .env");
+  packageId = id;
+
+  const regId = process.env.REGISTRY_ID;
+  if (!regId) throw new Error("REGISTRY_ID is required in .env");
+  registryId = regId;
+
+  const adminPrivKey = process.env.ADMIN_PRIVATE_KEY;
+  if (!adminPrivKey) throw new Error("ADMIN_PRIVATE_KEY is required in .env");
+  const decoded = decodeSuiPrivateKey(adminPrivKey);
+  adminKeypair = Ed25519Keypair.fromSecretKey(decoded.secretKey);
+  const adminAddress = adminKeypair.getPublicKey().toSuiAddress();
+
+  log("server", "config", `PACKAGE_ID=${packageId}`);
+  log("server", "config", `REGISTRY_ID=${registryId}`);
+  log("server", "config", `admin=${adminAddress}`);
+
+  // ── Init Sui client ──
+  const network = process.env.NETWORK ?? "testnet";
+  const rpcUrl = process.env.RPC_URL ?? `https://fullnode.${network}.sui.io:443`;
+  const suiClient = new SuiGrpcClient({ network, baseUrl: rpcUrl });
+
+  // ── Init Walrus ──
+  initWalrus(suiClient);
+
+  // ── Init Seal ──
+  const sealClient = new SealClient({
+    suiClient,
+    serverConfigs: TESTNET_KEY_SERVERS,
+    verifyKeyServers: false,
+  });
+  initSeal(sealClient, packageId, registryId, adminAddress);
+
+  // ── Init SQLite ──
+  const dbPath = process.env.DB_PATH ?? "./data/walrus.db";
+  initDb(dbPath);
+  log("server", "config", `DB=${dbPath}`);
+
   const server = Bun.serve({
     port,
     async fetch(req) {
@@ -490,4 +580,12 @@ export function startServer(port = 3001): { server: BunServer; stop: () => void 
     server,
     stop: () => server.stop(),
   };
+}
+
+// ── Direct execution: `bun run src/server.ts` ───────────────
+
+if (import.meta.main) {
+  const port = Number(process.argv[2]) || 3001;
+  startServer(port);
+  console.log(`server listening on http://localhost:${port}`);
 }
