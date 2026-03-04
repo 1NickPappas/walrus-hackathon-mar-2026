@@ -163,7 +163,8 @@ The test suite is sequential (each test depends on the previous):
 3. **Add user** — admin adds user address to allowlist
 4. **Walrus upload/download** — uploads `hello.txt` to Walrus, downloads and verifies match
 5. **Encrypt** — encrypts `hello.txt` via Seal with threshold encryption
-6. **Decrypt** — user decrypts as an authorized allowlist member
+6. **Upload encrypted blob + publish manifest** — uploads encrypted bytes to Walrus, records blob ID on-chain via `publishManifest`
+7. **Decrypt** — user decrypts as an authorized allowlist member
 
 **Note:** Publishing uses the TypeScript SDK (not `sui client publish`), so no CLI env/key configuration is needed — only `sui move build` is called for Move compilation.
 

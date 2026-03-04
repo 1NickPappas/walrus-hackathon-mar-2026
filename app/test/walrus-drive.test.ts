@@ -13,6 +13,7 @@ import { SealClient, SessionKey } from "@mysten/seal";
 import {
   register,
   grantAccess,
+  publishManifest,
   sealApprove,
 } from "../src/generated/walrus_drive/drive.js";
 import { initWalrus, uploadBlob, downloadBlob } from "../src/walrus.ts";
@@ -193,6 +194,30 @@ describe("walrus-drive", () => {
     console.log(
       `Encrypted: ${plaintext.length} bytes -> ${encryptedBytes.length} bytes`,
     );
+  });
+
+  it("should upload encrypted blob and publish manifest", async () => {
+    // Upload encrypted bytes to Walrus
+    const encryptedBlobId = await uploadBlob(encryptedBytes, adminKeypair, { epochs: 3 });
+    expect(encryptedBlobId).toBeTruthy();
+    console.log("Encrypted Blob ID:", encryptedBlobId);
+
+    // Publish manifest on-chain with the blob ID
+    const tx = new Transaction();
+    publishManifest({
+      package: packageId,
+      arguments: { registry: registryId, blobId: encryptedBlobId },
+    })(tx);
+
+    const result = await client.signAndExecuteTransaction({
+      transaction: tx,
+      signer: adminKeypair,
+    });
+    await client.waitForTransaction({ result });
+
+    expect(result.$kind).toBe("Transaction");
+    expect(result.Transaction!.status.success).toBe(true);
+    console.log("Manifest published, digest:", result.Transaction!.digest);
   });
 
   it("should decrypt as authorized user", async () => {
