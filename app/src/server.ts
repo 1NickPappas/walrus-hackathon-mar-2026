@@ -248,28 +248,36 @@ function handleCreate(body: Record<string, unknown>): Response {
   }
   const { parent, name } = result;
 
-  if (parent.children.has(name)) {
-    logError("create", path, "EEXIST");
+  // Prepend timestamp to filename: test.txt → 2026-03-04T12-34-56_test.txt
+  const now = new Date();
+  const stamp = now.toISOString().slice(0, 19).replace(/:/g, "-"); // 2026-03-04T12-34-56
+  const dotIdx = name.lastIndexOf(".");
+  const stampedName =
+    dotIdx > 0
+      ? `${stamp}_${name.slice(0, dotIdx)}${name.slice(dotIdx)}`
+      : `${stamp}_${name}`;
+
+  if (parent.children.has(stampedName)) {
+    logError("create", path, `EEXIST (as ${stampedName})`);
     return jsonError("EEXIST", 400);
   }
 
-  const now = new Date();
-  const timestampLine = `[${now.toISOString()}]\n`;
   const node: FileNode = {
     type: "file",
     mode,
-    content: Buffer.from(timestampLine),
+    content: Buffer.alloc(0),
     ctime: now,
     mtime: now,
     atime: now,
   };
 
-  parent.children.set(name, node);
+  parent.children.set(stampedName, node);
   parent.mtime = new Date();
 
+  const stampedPath = path.slice(0, path.length - name.length) + stampedName;
   const fd = nextFd++;
-  openFds.set(fd, { path, node });
-  log("create", path, `fd=${fd} mode=${mode.toString(8)} (stamped ${timestampLine.trim()})`);
+  openFds.set(fd, { path: stampedPath, node });
+  log("create", path, `→ ${stampedName} fd=${fd} mode=${mode.toString(8)}`);
   return jsonOk({ fd });
 }
 
