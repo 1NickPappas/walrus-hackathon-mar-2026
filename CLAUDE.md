@@ -37,11 +37,11 @@ walrus-hackathon-mar-2026/
 │       ├── fuse.ts                    # ✅ FUSE HTTP thin client (12 ops → localhost:3001)
 │       ├── types/fuse-native.d.ts     # ✅ TypeScript declarations for fuse-native
 │       ├── db.ts                      # 🔲 Stub — SQLite local cache (will use bun:sqlite)
-│       ├── walrus.ts                  # 🔲 Stub — Walrus blob upload/download
+│       ├── walrus.ts                  # ✅ Walrus blob upload/download via @mysten/walrus SDK
 │       ├── seal.ts                    # 🔲 Stub — Seal encrypt/decrypt
 │       └── sui.ts                     # 🔲 Stub — Sui on-chain file metadata
 │   ├── test/
-│   │   └── walrus-drive.test.ts       # ✅ Integration tests: publish, allowlist, encrypt, decrypt
+│   │   └── walrus-drive.test.ts       # ✅ Integration tests: publish, allowlist, walrus, encrypt, decrypt
 │   ├── test_assets/
 │   │   └── hello.txt                  # Test fixture for encrypt/decrypt
 │   ├── jest.config.ts                 # Jest config (ts-jest, ESM)
@@ -130,6 +130,7 @@ Key functions: `register`, `grant_access`, `revoke_access`, `publish_manifest`, 
 - **No `better-sqlite3`:** Removed in favor of `bun:sqlite` (built into Bun runtime). `db.ts` is still a stub.
 - **Two-process model:** `index.ts` spawns `fuse-mount.ts` via `npx tsx` (Node). Signals are forwarded for graceful cleanup. Each half can be run independently with `start:server` / `start:fuse` for debugging.
 - **Filename timestamp prefix (temporary):** `handleCreate` in `server.ts` prepends an ISO timestamp to filenames (`test.txt` → `2026-03-04T12-34-56_test.txt`). This is **for testing only** — remove it when integrating Walrus and Sui.
+- **Walrus SDK uses client extension pattern:** `suiClient.$extend(walrus())` — not a standalone constructor. Methods accessed via `client.walrus.writeBlob()` / `client.walrus.readBlob()`. Uploads require WAL tokens (not SUI) for storage fees.
 
 ## Commands
 
@@ -160,8 +161,10 @@ The test suite is sequential (each test depends on the previous):
 1. **Publish** — compiles Move via `sui move build --dump-bytecode-as-base64`, publishes via SDK `tx.publish()`
 2. **Create allowlist** — admin creates a Seal allowlist in the registry
 3. **Add user** — admin adds user address to allowlist
-4. **Encrypt** — encrypts `hello.txt` via Seal with threshold encryption
-5. **Decrypt** — user decrypts as an authorized allowlist member
+4. **Walrus upload/download** — uploads `hello.txt` to Walrus, downloads and verifies match
+5. **Encrypt** — encrypts `hello.txt` via Seal with threshold encryption
+6. **Upload encrypted blob + publish manifest** — uploads encrypted bytes to Walrus, records blob ID on-chain via `publishManifest`
+7. **Decrypt** — user decrypts as an authorized allowlist member
 
 **Note:** Publishing uses the TypeScript SDK (not `sui client publish`), so no CLI env/key configuration is needed — only `sui move build` is called for Move compilation.
 
@@ -169,6 +172,7 @@ The test suite is sequential (each test depends on the previous):
 
 1. ~~**HTTP server** (`app/src/server.ts`)~~ — ✅ Implemented with in-memory file tree (placeholder until Walrus/Seal/Sui replace it)
 2. **SQLite cache** (`app/src/db.ts`) — file tree metadata using `bun:sqlite`
-3. **Walrus client** (`app/src/walrus.ts`) — blob upload/download via Walrus HTTP API
+3. ~~**Walrus client** (`app/src/walrus.ts`)~~ — ✅ Implemented with `@mysten/walrus` SDK (upload/download blobs)
 4. **Seal integration** (`app/src/seal.ts`) — encrypt/decrypt using on-chain policy
 5. **Sui client** (`app/src/sui.ts`) — create/update/delete FileEntry objects on-chain
+6. **Replace `sui move build` CLI with SDK** — test publish step uses `execSync("sui move build --dump-bytecode-as-base64")` which requires the Sui CLI binary. Replace with SDK-based Move compilation to remove CLI dependency and enable Dockerization
