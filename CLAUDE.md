@@ -26,6 +26,7 @@ walrus-hackathon-mar-2026/
 ├── CLAUDE.md                          # ← you are here
 ├── contract/                          # Move smart contract (Sui)
 │   ├── Move.toml
+│   ├── bytecode.json                  # ✅ Pre-compiled Move bytecode (re-run `bun run compile` after contract changes)
 │   └── sources/walrus_drive.move      # drive module: allowlist + manifest sharing via Seal
 ├── app/                               # TypeScript FUSE daemon
 │   ├── package.json                   # Scripts: start, build, codegen
@@ -39,6 +40,7 @@ walrus-hackathon-mar-2026/
 │       ├── db.ts                      # ✅ SQLite blob tracker (bun:sqlite) — initDb, insertBlob, getBlob, listBlobs
 │       ├── walrus.ts                  # ✅ Walrus blob upload/download via @mysten/walrus SDK
 │       ├── seal.ts                    # ✅ Seal encrypt (decrypt stub) — initSeal, encrypt via SealClient
+│       ├── publish.ts                 # ✅ SDK publish utility — reads pre-compiled bytecode, publishes via SDK
 │       └── sui.ts                     # 🔲 Stub — Sui on-chain file metadata
 │   ├── test/
 │   │   └── walrus-drive.test.ts       # ✅ Integration tests: publish, allowlist, walrus, encrypt, decrypt
@@ -143,6 +145,7 @@ bun run start /path/to/mount   # mount at custom path
 bun run start:server           # run HTTP server only (Bun)
 bun run start:fuse             # run FUSE client only (Node/tsx) — needs server running
 bun run build                  # type-check only (no JS output)
+bun run compile                # re-compile Move bytecode to contract/bytecode.json (requires sui CLI)
 bun run codegen                # generate TS bindings from Move contract
 bun run test                   # run integration tests (requires .env with keys)
 ```
@@ -161,7 +164,7 @@ Integration tests in `app/test/walrus-drive.test.ts` run against **testnet**. Th
 
 The test suite is sequential (each test depends on the previous):
 
-1. **Publish** — compiles Move via `sui move build --dump-bytecode-as-base64`, publishes via SDK `tx.publish()`
+1. **Publish** — reads pre-compiled `contract/bytecode.json`, publishes via `publishPackage()` SDK utility
 2. **Create allowlist** — admin creates a Seal allowlist in the registry
 3. **Add user** — admin adds user address to allowlist
 4. **Walrus upload/download** — uploads `hello.txt` to Walrus, downloads and verifies match
@@ -169,7 +172,7 @@ The test suite is sequential (each test depends on the previous):
 6. **Upload encrypted blob + publish manifest** — uploads encrypted bytes to Walrus, records blob ID on-chain via `publishManifest`
 7. **Decrypt** — user decrypts as an authorized allowlist member
 
-**Note:** Publishing uses the TypeScript SDK (not `sui client publish`), so no CLI env/key configuration is needed — only `sui move build` is called for Move compilation.
+**Note:** Publishing uses the TypeScript SDK with pre-compiled bytecode (`contract/bytecode.json`). No `sui` CLI is needed at test runtime — only for re-compiling via `bun run compile` when the contract changes.
 
 ## What's next (TODO)
 
@@ -178,4 +181,4 @@ The test suite is sequential (each test depends on the previous):
 3. ~~**Walrus client** (`app/src/walrus.ts`)~~ — ✅ Implemented with `@mysten/walrus` SDK (upload/download blobs)
 4. ~~**Seal encrypt** (`app/src/seal.ts`)~~ — ✅ `initSeal` + `encrypt` using `SealClient` (decrypt still TODO)
 5. **Sui client** (`app/src/sui.ts`) — create/update/delete FileEntry objects on-chain
-6. **Replace `sui move build` CLI with SDK** — test publish step uses `execSync("sui move build --dump-bytecode-as-base64")` which requires the Sui CLI binary. Replace with SDK-based Move compilation to remove CLI dependency and enable Dockerization
+6. ~~**Replace `sui move build` CLI with SDK**~~ — ✅ Pre-compiled bytecode in `contract/bytecode.json` + `publishPackage()` utility in `app/src/publish.ts`. No CLI needed at runtime

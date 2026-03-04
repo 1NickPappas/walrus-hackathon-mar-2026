@@ -9,6 +9,7 @@
     "start": "bun run src/index.ts",
     "start:server": "bun run src/server.ts",
     "start:fuse": "npx tsx src/fuse-mount.ts",
+    "compile": "sui move build --dump-bytecode-as-base64 --path ../contract > ../contract/bytecode.json",
     "test": "NODE_OPTIONS='--experimental-vm-modules' jest --runInBand"
   },
   "dependencies": {

@@ -1,4 +1,3 @@
-import { execSync } from "child_process";
 import { readFileSync } from "fs";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
@@ -9,6 +8,8 @@ import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { decodeSuiPrivateKey } from "@mysten/sui/cryptography";
 import { fromHex, toHex } from "@mysten/sui/utils";
 import { SealClient, SessionKey } from "@mysten/seal";
+
+import { publishPackage } from "../src/publish.ts";
 
 import {
   register,
@@ -77,47 +78,20 @@ describe("walrus-drive", () => {
   });
 
   it("should publish the contract", async () => {
-    const contractPath = resolve(__dirname, "../../contract");
+    const bytecodePath = resolve(__dirname, "../../contract/bytecode.json");
 
-    // Compile Move bytecode (no env/key config needed)
-    const buildOutput = execSync(
-      `sui move build --dump-bytecode-as-base64 --path "${contractPath}"`,
-      { encoding: "utf-8" },
-    );
-    const { modules, dependencies } = JSON.parse(buildOutput);
-
-    // Publish via SDK
-    const tx = new Transaction();
-    const upgradeCap = tx.publish({ modules, dependencies });
-    tx.transferObjects([upgradeCap], adminAddress);
-
-    const result = await client.signAndExecuteTransaction({
-      transaction: tx,
+    const result = await publishPackage({
+      client,
       signer: adminKeypair,
-      include: { effects: true, objectTypes: true },
+      bytecodePath,
+      extractObjects: ["::Registry"],
     });
-    await client.waitForTransaction({ result });
 
-    expect(result.$kind).toBe("Transaction");
-    const txn = result.Transaction!;
-    expect(txn.status.success).toBe(true);
+    packageId = result.packageId;
+    registryId = result.createdObjects["::Registry"];
 
-    // Extract packageId — find changedObject with PackageWrite
-    const published = txn.effects!.changedObjects.find(
-      (c) => c.outputState === "PackageWrite",
-    );
-    expect(published).toBeDefined();
-    packageId = published!.objectId;
-
-    // Extract registryId — find created object whose type contains ::Registry
-    const created = txn.effects!.changedObjects.filter(
-      (c) => c.idOperation === "Created" && c.outputState === "ObjectWrite",
-    );
-    const registryEntry = created.find((c) =>
-      txn.objectTypes![c.objectId]?.includes("::Registry"),
-    );
-    expect(registryEntry).toBeDefined();
-    registryId = registryEntry!.objectId;
+    expect(packageId).toBeTruthy();
+    expect(registryId).toBeTruthy();
 
     console.log("Package ID:", packageId);
     console.log("Registry ID:", registryId);
