@@ -44,6 +44,7 @@ describe("walrus-drive", () => {
   // Shared state across sequential tests
   let packageId: string;
   let registryId: string;
+  let blobId: string;
   let sealId: Uint8Array;
   let encryptedBytes: Uint8Array;
 
@@ -162,7 +163,7 @@ describe("walrus-drive", () => {
 
   it("should upload and download a blob via Walrus", async () => {
     initWalrus(client);
-    const blobId = await uploadBlob(plaintext, adminKeypair, { epochs: 3 });
+    blobId = await uploadBlob(plaintext, adminKeypair, { epochs: 3 });
     expect(blobId).toBeTruthy();
     console.log("Blob ID:", blobId);
 
