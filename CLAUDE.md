@@ -45,7 +45,7 @@ ADMIN_PRIVATE_KEY=suiprivkey1q...    # Admin wallet (owns files, pays for upload
 USER_PRIVATE_KEY=suiprivkey1q...     # Test user (for decrypt tests)
 PACKAGE_ID=0x...                     # Published Move package ID (from test or manual deploy)
 REGISTRY_ID=0x...                    # Shared Registry object ID (created on publish)
-DB_PATH=./data/walrus.db             # Optional — defaults to ./data/walrus.db
+# DB is auto-created as a hidden file next to the mount point (e.g. ~/walrusfs → ~/.walrusfs.db)
 ```
 
 ### Quick start
@@ -68,7 +68,7 @@ bun run build
 # 5. Run server only (no FUSE mount)
 bun run start:server
 
-# 6. Run full stack (server + FUSE mount at ./mnt)
+# 6. Run full stack (server + FUSE mount at ~/walrusfs)
 bun run start
 ```
 
@@ -198,7 +198,7 @@ Key functions: `register`, `grant_access`, `revoke_access`, `publish_manifest`, 
 ```bash
 cd app
 bun install                    # install deps (includes tsx for Node FUSE process)
-bun run start                  # start server (Bun) + FUSE (Node/tsx) at ./mnt
+bun run start                  # start server (Bun) + FUSE (Node/tsx) at ~/walrusfs
 bun run start /path/to/mount   # mount at custom path
 bun run start:server           # run HTTP server only (Bun)
 bun run start:fuse             # run FUSE client only (Node/tsx) — needs server running
@@ -218,7 +218,7 @@ Integration tests in `app/test/walrus-drive.test.ts` run against **testnet**. Th
 - `REGISTRY_ID` — shared Registry object ID (`0x...`)
 - `NETWORK` — defaults to `testnet`
 - `RPC_URL` — defaults to `https://fullnode.testnet.sui.io:443`
-- `DB_PATH` — SQLite database path (defaults to `./data/walrus.db`)
+- SQLite DB is auto-created as a hidden file next to the mount point (e.g. `~/walrusfs` → `~/.walrusfs.db`)
 
 The test suite is sequential (each test depends on the previous):
 

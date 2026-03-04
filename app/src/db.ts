@@ -8,6 +8,7 @@ export interface FileRecord {
   filename: string;
   blob_id: string;
   size: number;
+  epochs: number;
   created_at: string;
 }
 
@@ -19,16 +20,17 @@ export function initDb(path: string): void {
       filename   TEXT PRIMARY KEY,
       blob_id    TEXT NOT NULL,
       size       INTEGER NOT NULL,
+      epochs     INTEGER NOT NULL,
       created_at TEXT DEFAULT (datetime('now'))
     )
   `);
 }
 
-export function upsertFile(filename: string, blobId: string, size: number): void {
+export function upsertFile(filename: string, blobId: string, size: number, epochs: number): void {
   db.run(
-    `INSERT INTO files (filename, blob_id, size) VALUES (?, ?, ?)
-     ON CONFLICT(filename) DO UPDATE SET blob_id = excluded.blob_id, size = excluded.size, created_at = datetime('now')`,
-    [filename, blobId, size],
+    `INSERT INTO files (filename, blob_id, size, epochs) VALUES (?, ?, ?, ?)
+     ON CONFLICT(filename) DO UPDATE SET blob_id = excluded.blob_id, size = excluded.size, epochs = excluded.epochs, created_at = datetime('now')`,
+    [filename, blobId, size, epochs],
   );
 }
 

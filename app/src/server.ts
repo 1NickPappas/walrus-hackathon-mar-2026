@@ -10,6 +10,9 @@ import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { decodeSuiPrivateKey } from "@mysten/sui/cryptography";
 import { SealClient } from "@mysten/seal";
 
+import { resolve, dirname, join } from "path";
+import { mkdirSync } from "fs";
+import { homedir } from "os";
 import { initDb, upsertFile } from "./db.ts";
 import { initWalrus, uploadBlob } from "./walrus.ts";
 import { initSeal, encrypt } from "./seal.ts";
@@ -478,13 +481,15 @@ function handleRelease(body: Record<string, unknown>): Response {
   return jsonOk({});
 }
 
+const STORAGE_EPOCHS = 5;
+
 async function uploadFileToWalrus(filename: string, content: Buffer, size: number): Promise<void> {
   log("upload", filename, "encrypting...");
   const encrypted = await encrypt(new Uint8Array(content));
   log("upload", filename, `encrypted (${content.length}→${encrypted.length}B), uploading to Walrus...`);
-  const blobId = await uploadBlob(encrypted, adminKeypair, { epochs: 3 });
-  log("upload", filename, `uploaded, blobId=${blobId}`);
-  upsertFile(filename, blobId, size);
+  const blobId = await uploadBlob(encrypted, adminKeypair, { epochs: STORAGE_EPOCHS });
+  log("upload", filename, `uploaded, blobId=${blobId} (${STORAGE_EPOCHS} epochs)`);
+  upsertFile(filename, blobId, size, STORAGE_EPOCHS);
   log("upload", filename, `tracked in DB`);
 }
 
@@ -507,7 +512,7 @@ const handlers: Record<string, HandlerFn> = {
 
 // ── Server entrypoint ───────────────────────────────────────
 
-export function startServer(port = 3001): { server: BunServer; stop: () => void } {
+export function startServer(port = 3001, mountPoint = join(homedir(), "walrusfs")): { server: BunServer; stop: () => void } {
   // ── Required env vars ──
   const id = process.env.PACKAGE_ID;
   if (!id) throw new Error("PACKAGE_ID is required in .env");
@@ -543,8 +548,10 @@ export function startServer(port = 3001): { server: BunServer; stop: () => void 
   });
   initSeal(sealClient, packageId, registryId, adminAddress);
 
-  // ── Init SQLite ──
-  const dbPath = process.env.DB_PATH ?? "./data/walrus.db";
+  // ── Init SQLite ── hidden file next to the mount point
+  const resolvedMount = resolve(mountPoint);
+  const dbPath = join(dirname(resolvedMount), `.${resolvedMount.split("/").pop()}.db`);
+  mkdirSync(dirname(dbPath), { recursive: true });
   initDb(dbPath);
   log("server", "config", `DB=${dbPath}`);
 
@@ -586,6 +593,7 @@ export function startServer(port = 3001): { server: BunServer; stop: () => void 
 
 if (import.meta.main) {
   const port = Number(process.argv[2]) || 3001;
-  startServer(port);
+  const mount = process.argv[3]; // undefined → uses ~/walrusfs default
+  startServer(port, mount);
   console.log(`server listening on http://localhost:${port}`);
 }
