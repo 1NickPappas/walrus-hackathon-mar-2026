@@ -43,3 +43,11 @@ source = { root = true }
 use_environment = "testnet"
 manifest_digest = "0532D72C4F42A4472D331C54E2F8FB1595A305815D58568D26C6F8A4AC9BBFCE"
 deps = { Sui = "Sui" }
+
+[env]
+
+[env.testnet]
+chain-id = "4c78adac"
+original-published-id = "0xcb336e7bb5739bdfd03a6d5de7f626a6b057fee84cbd234d3a16840d25e13b43"
+latest-published-id = "0xcb336e7bb5739bdfd03a6d5de7f626a6b057fee84cbd234d3a16840d25e13b43"
+published-version = "1"
