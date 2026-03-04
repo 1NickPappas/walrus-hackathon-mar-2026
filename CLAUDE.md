@@ -31,7 +31,8 @@ walrus-hackathon-mar-2026/
 │   ├── package.json                   # Scripts: start, build, codegen
 │   ├── tsconfig.json                  # Bun-compatible: module=preserve, bundler resolution
 │   └── src/
-│       ├── index.ts                   # Entry point — parses CLI arg, calls mountDrive()
+│       ├── index.ts                   # Entry point — starts server, then mounts FUSE
+│       ├── server.ts                  # ✅ Bun.serve() HTTP server — in-memory FS, 12 FUSE ops
 │       ├── fuse.ts                    # ✅ FUSE HTTP thin client (12 ops → localhost:3001)
 │       ├── types/fuse-native.d.ts     # ✅ TypeScript declarations for fuse-native
 │       ├── db.ts                      # 🔲 Stub — SQLite local cache (will use bun:sqlite)
@@ -108,7 +109,7 @@ bun run codegen                # generate TS bindings from Move contract
 
 ## What's next (TODO)
 
-1. **HTTP server** (`app/src/server.ts`) — `Bun.serve()` implementing the API contract above, wiring db + walrus + seal + sui
+1. ~~**HTTP server** (`app/src/server.ts`)~~ — ✅ Implemented with in-memory file tree (placeholder until Walrus/Seal/Sui replace it)
 2. **SQLite cache** (`app/src/db.ts`) — file tree metadata using `bun:sqlite`
 3. **Walrus client** (`app/src/walrus.ts`) — blob upload/download via Walrus HTTP API
 4. **Seal integration** (`app/src/seal.ts`) — encrypt/decrypt using on-chain policy
