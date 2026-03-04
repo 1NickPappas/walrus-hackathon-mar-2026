@@ -20,9 +20,6 @@ mnt/
 contract/build/
 contract/package_summaries/
 
-# Generated code
-app/src/generated/
-
 # OS
 .DS_Store
 
