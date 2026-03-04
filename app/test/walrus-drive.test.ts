@@ -15,6 +15,7 @@ import {
   grantAccess,
   sealApprove,
 } from "../src/generated/walrus_drive/drive.js";
+import { initWalrus, uploadBlob, downloadBlob } from "../src/walrus.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -157,6 +158,17 @@ describe("walrus-drive", () => {
       "User added to allowlist, digest:",
       result.Transaction!.digest,
     );
+  });
+
+  it("should upload and download a blob via Walrus", async () => {
+    initWalrus(client);
+    const blobId = await uploadBlob(plaintext, adminKeypair, { epochs: 3 });
+    expect(blobId).toBeTruthy();
+    console.log("Blob ID:", blobId);
+
+    const downloaded = await downloadBlob(blobId);
+    expect(downloaded).toEqual(plaintext);
+    console.log("Downloaded blob matches original");
   });
 
   it("should encrypt hello.txt with Seal", async () => {
