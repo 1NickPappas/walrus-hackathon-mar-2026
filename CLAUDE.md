@@ -174,3 +174,4 @@ The test suite is sequential (each test depends on the previous):
 3. ~~**Walrus client** (`app/src/walrus.ts`)~~ — ✅ Implemented with `@mysten/walrus` SDK (upload/download blobs)
 4. **Seal integration** (`app/src/seal.ts`) — encrypt/decrypt using on-chain policy
 5. **Sui client** (`app/src/sui.ts`) — create/update/delete FileEntry objects on-chain
+6. **Replace `sui move build` CLI with SDK** — test publish step uses `execSync("sui move build --dump-bytecode-as-base64")` which requires the Sui CLI binary. Replace with SDK-based Move compilation to remove CLI dependency and enable Dockerization
