@@ -4,18 +4,17 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc",
+    "build": "bun run --bun tsc",
     "codegen": "sui-ts-codegen generate",
-    "start": "node dist/index.js"
+    "start": "bun run src/index.ts"
   },
   "dependencies": {
     "@mysten/sui": "^1.0.0",
-    "better-sqlite3": "^11.0.0",
     "fuse-native": "^2.2.2"
   },
   "devDependencies": {
     "@mysten/codegen": "^0.8.2",
-    "@types/better-sqlite3": "^7.6.0",
+    "@types/bun": "^1.2.0",
     "@types/node": "^22.0.0",
     "typescript": "^5.7.0"
   }
