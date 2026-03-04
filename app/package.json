@@ -6,16 +6,24 @@
   "scripts": {
     "build": "bun run --bun tsc",
     "codegen": "sui-ts-codegen generate",
-    "start": "bun run src/index.ts"
+    "start": "bun run src/index.ts",
+    "test": "NODE_OPTIONS='--experimental-vm-modules' jest --runInBand"
   },
   "dependencies": {
-    "@mysten/sui": "^1.0.0",
+    "@mysten/seal": "^1.1.0",
+    "@mysten/sui": "^2.5.1",
+    "better-sqlite3": "^11.0.0",
     "fuse-native": "^2.2.2"
   },
   "devDependencies": {
     "@mysten/codegen": "^0.8.2",
+    "@types/better-sqlite3": "^7.6.0",
     "@types/bun": "^1.2.0",
+    "@types/jest": "^30.0.0",
     "@types/node": "^22.0.0",
+    "dotenv": "^17.3.1",
+    "jest": "^30.2.0",
+    "ts-jest": "^29.4.6",
     "typescript": "^5.7.0"
   }
 }
