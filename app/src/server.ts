@@ -47,7 +47,7 @@ type FsNode = FileNode | DirNode;
 // ── File descriptor tracking ────────────────────────────────
 
 let nextFd = 10;
-const openFds = new Map<number, { path: string; node: FileNode }>();
+const openFds = new Map<number, { path: string; node: FileNode; dirty: boolean }>();
 
 // ── Root directory ──────────────────────────────────────────
 
@@ -190,7 +190,7 @@ function handleOpen(body: Record<string, unknown>): Response {
     return jsonError("EISDIR", 400);
   }
   const fd = nextFd++;
-  openFds.set(fd, { path, node });
+  openFds.set(fd, { path, node, dirty: false });
   log("open", path, `fd=${fd} flags=${flags} size=${node.content.length}`);
   return jsonOk({ fd });
 }
@@ -247,6 +247,7 @@ function handleWrite(body: Record<string, unknown>): Response {
 
   incoming.copy(node.content, position);
   node.mtime = new Date();
+  entry.dirty = true;
   log("write", path, `fd=${fd} pos=${position} ${bytesWritten}B written (${oldSize}→${node.content.length}B)`);
   return jsonOk({ bytesWritten });
 }
@@ -281,7 +282,7 @@ function handleCreate(body: Record<string, unknown>): Response {
   parent.mtime = new Date();
 
   const fd = nextFd++;
-  openFds.set(fd, { path, node });
+  openFds.set(fd, { path, node, dirty: true });
   log("create", path, `fd=${fd} mode=${mode.toString(8)}`);
   return jsonOk({ fd });
 }
@@ -441,7 +442,7 @@ async function handleRelease(body: Record<string, unknown>): Promise<Response> {
   openFds.delete(fd);
 
   // Encrypt → Upload → SQLite pipeline for files with content
-  if (entry && entry.node.content.length > 0 && signer) {
+  if (entry && entry.dirty && entry.node.content.length > 0 && signer) {
     const fileName = path.split("/").pop() ?? path;
     try {
       const encrypted = await encrypt(entry.node.content);
