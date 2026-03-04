@@ -106,6 +106,7 @@ Key functions: `create_list`, `add`, `remove`, `seal_approve`.
 - **Type declarations:** `fuse-native` has no built-in types. We use namespace merging in `types/fuse-native.d.ts` so `Fuse.FuseOperations` works alongside `export = Fuse`.
 - **No `better-sqlite3`:** Removed in favor of `bun:sqlite` (built into Bun runtime). `db.ts` is still a stub.
 - **Two-process model:** `index.ts` spawns `fuse-mount.ts` via `npx tsx` (Node). Signals are forwarded for graceful cleanup. Each half can be run independently with `start:server` / `start:fuse` for debugging.
+- **Filename timestamp prefix (temporary):** `handleCreate` in `server.ts` prepends an ISO timestamp to filenames (`test.txt` → `2026-03-04T12-34-56_test.txt`). This is **for testing only** — remove it when integrating Walrus and Sui.
 
 ## Commands
 
