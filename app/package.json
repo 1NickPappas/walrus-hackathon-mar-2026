@@ -10,7 +10,8 @@
     "start:server": "bun run src/server.ts",
     "start:fuse": "npx tsx src/fuse-mount.ts",
     "test": "NODE_OPTIONS='--experimental-vm-modules' jest --runInBand",
-    "seed-web": "bun run scripts/seed-web.ts"
+    "seed-web": "bun run scripts/seed-web.ts",
+    "share": "bun run scripts/share.ts"
   },
   "dependencies": {
     "@mysten/seal": "^1.1.0",
