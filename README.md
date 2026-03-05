@@ -1,10 +1,104 @@
-# Walrus FS
+# walrusfs-fuse
 
-A decentralized Dropbox for macOS.
+**A decentralized filesystem for Linux (and macOS)** -- drop files into a virtual drive, and they're automatically encrypted, stored on [Walrus](https://www.walrus.xyz/), and secured by [Sui](https://sui.io/).
 
-**FUSE** filesystem + **Seal** encryption + **Walrus** storage + **Sui** on-chain logic.
+**FUSE** · **Seal** · **Walrus** · **Sui**
 
 Drop files into a mounted drive. They get encrypted, stored on Walrus, and managed on Sui. Or use the web UI to browse and download shared files from the browser.
+
+```
+cp report.pdf ~/walrusfs/
+# -> Seal encrypts -> Walrus stores -> Sui controls access
+```
+
+## Demo
+
+<!-- TODO: embed demo video -->
+
+## How It Works
+
+![Architecture](docs/architecture.png)
+
+### The Pipeline
+
+| Step | What happens | Tech |
+|------|-------------|------|
+| **Drop a file** | FUSE intercepts writes; on file close, content is encrypted and uploaded | `fuse-native` (Node addon) |
+| **Encrypt** | Seal threshold encryption with on-chain access policy | `@mysten/seal` |
+| **Store** | Encrypted blob uploaded to Walrus decentralized storage | `@mysten/walrus` |
+| **Track** | File metadata (name, blob ID, size) saved locally | `bun:sqlite` |
+| **Share** | Owner grants access on-chain, publishes encrypted manifest | Move smart contract |
+
+### Sharing Model
+
+**Alice** (file owner):
+1. Files are encrypted and stored via the FUSE mount
+2. Grants Bob access: `grant_access(registry, bob_address)` on-chain
+3. Publishes a manifest of shared files to Walrus
+
+**Bob** (recipient):
+1. Connects wallet via web UI
+2. Finds Alice's manifest on-chain, downloads file listing from Walrus
+3. Downloads and decrypts individual files via Seal
+
+## Tech Stack
+
+| Layer | Technology | Role |
+|-------|-----------|------|
+| Filesystem | `libfuse` + [`fuse-native`](https://github.com/fuse-friends/fuse-native) | Virtual drive mount |
+| Runtime | [Bun](https://bun.sh/) (server) + Node/tsx (FUSE) | Two-process architecture |
+| Encryption | [Seal](https://www.npmjs.com/package/@mysten/seal) | Threshold encryption with on-chain policy |
+| Storage | [Walrus](https://www.walrus.xyz/) | Decentralized blob storage |
+| Blockchain | [Sui](https://sui.io/) | Access control + file registry |
+| Database | `bun:sqlite` | Local file tracking |
+
+## Quick Start
+
+### Prerequisites
+
+- **Linux** with `libfuse-dev` (or **macOS** with [macFUSE](https://osxfuse.github.io/))
+- **Bun** >= 1.1 and **Node.js** >= 18
+- **Sui CLI** (for contract compilation only)
+- Two funded Sui testnet wallets (admin + user) with both SUI and WAL tokens
+
+### Setup
+
+```bash
+# Install dependencies
+cd app && bun install
+
+# Configure environment
+cp .env.example .env
+# Edit .env with your keys:
+#   ADMIN_PRIVATE_KEY=suiprivkey1q...
+#   USER_PRIVATE_KEY=suiprivkey1q...
+#   PACKAGE_ID=0x...
+#   REGISTRY_ID=0x...
+
+# Type-check
+bun run build
+
+# Start the drive (mounts at ~/walrusfs)
+bun run start
+```
+
+### Other Commands
+
+```bash
+bun run start:server       # HTTP server only (no FUSE mount)
+bun run start:fuse         # FUSE client only (needs server running)
+bun run codegen            # Regenerate TS bindings from Move contract
+bun run test               # Integration tests (requires .env with keys)
+```
+
+## Smart Contract
+
+A single shared `Registry` object on Sui with two tables:
+
+- **Allowlists** -- per-owner sets of addresses authorized to decrypt files
+- **Manifests** -- per-owner Walrus blob IDs pointing to shared file listings
+
+The `seal_approve` function acts as the Seal callback: it verifies the encryption namespace, extracts the owner address, and checks the caller is on the allowlist.
 
 ## Project Structure
 
@@ -38,7 +132,7 @@ walrus-hackathon-mar-2026/
 │           └── constants.ts    # Env var exports
 ```
 
-## How It Works
+## How Components Work
 
 | Component | What it does |
 |-----------|-------------|
@@ -120,3 +214,39 @@ Or with a custom user address:
 ```bash
 bun run scripts/seed.ts --user-address=0xABC...
 ```
+
+## Testing
+
+Integration tests run against Sui testnet and cover the full pipeline:
+
+```bash
+bun run test
+```
+
+1. Publish contract
+2. Create allowlist + add user
+3. Upload/download blob via Walrus
+4. Encrypt via Seal
+5. Upload encrypted blob + publish manifest
+6. Decrypt as authorized user
+
+## Built With
+
+Built for the [Walrus Hackathon](https://www.walrus.xyz/) (March 2026).
+
+## Hackathon Challenge Requirements
+
+| # | Requirement | Status | Notes |
+|---|------------|--------|-------|
+| CR-1 | Basic write path — SDK/API usage, epoch parameter, deletable flag | ✅ | `walrus.ts` uploadBlob with epochs + deletable params |
+| CR-2 | Basic read path — aggregator usage, error handling for missing/expired blobs | ✅ | SDK readBlob + web aggregator proxy with error handling |
+| CR-3 | Quilt creation — multipart form handling, patch identifier scheme, response parsing | ❌ | |
+| CR-4 | Patch retrieval from quilt — patch by ID, quilt patch listing, identifier-based access | ❌ | |
+| CR-5 | Upload history tracking — blob IDs | ✅ | SQLite tracks filename, blob_id, size, epochs, created_at |
+| CR-6 | Error handling and display for all operations | ✅ | Server jsonError helper + web UI error banners |
+| CR-7 | Smart contract asset management | ✅ | Move contract: Registry, allowlists, manifests, seal_approve |
+| CR-8 | Deletable blob lifecycle — immutability vs deletability | ✅ | Blobs created deletable by default; delete on file unlink |
+| CR-9 | Storage cost estimation before upload | ✅ | Server logs estimated cost before submitting upload |
+| CR-10 | Extend storage duration by additional epochs | ❌ | |
+| CR-11 | Blob integrity verification (hash check after download) | ✅ | Client verifies blob authentication before decryption |
+| CR-12 | Uploaded to GitHub; deployed on public URL | ✅ | GitHub repo + live web app |
