@@ -13,5 +13,5 @@
     "declaration": true,
     "types": ["node", "bun", "jest"]
   },
-  "include": ["src", "test"]
+  "include": ["src", "test", "scripts"]
 }
