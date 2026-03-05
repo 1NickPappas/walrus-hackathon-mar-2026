@@ -337,9 +337,15 @@ function handleUnlink(body: Record<string, unknown>): Response {
   parent.mtime = new Date();
   log("unlink", path, `removed (was ${size}B)`);
 
-  // Fire-and-forget: delete blob from Walrus + remove DB record
+  // Cancel any pending debounced upload, then delete blob from Walrus + DB
   if (!isInternalFile(path)) {
     const filename = path.split("/").pop()!;
+    const pending = pendingUploads.get(filename);
+    if (pending) {
+      clearTimeout(pending);
+      pendingUploads.delete(filename);
+      log("unlink", path, `cancelled pending upload`);
+    }
     deleteFileFromWalrus(filename).catch((err) =>
       logError("delete", path, String(err)),
     );
@@ -477,22 +483,49 @@ function handleRelease(body: Record<string, unknown>): Response {
   openFds.delete(fd);
   log("release", path, `fd=${fd} (${openFds.size} fds open)`);
 
-  // Fire-and-forget: encrypt → upload → DB insert
+  // Debounced fire-and-forget: encrypt → upload → DB insert
   if (node && node.content.length > 0 && !isInternalFile(path)) {
     const filename = path.split("/").pop()!;
     const snapshot = Buffer.from(node.content);
     const size = snapshot.length;
-    uploadFileToWalrus(filename, snapshot, size).catch((err) =>
-      logError("upload", path, String(err)),
-    );
+    scheduleUpload(filename, snapshot, size, path);
   }
 
   return jsonOk({});
 }
 
 const STORAGE_EPOCHS = 5;
+const UPLOAD_DEBOUNCE_MS = 2000;
+const pendingUploads = new Map<string, Timer>();
+
+function scheduleUpload(filename: string, content: Buffer, size: number, path: string): void {
+  const existing = pendingUploads.get(filename);
+  if (existing) {
+    clearTimeout(existing);
+    log("upload", filename, `debounced (reset ${UPLOAD_DEBOUNCE_MS}ms timer)`);
+  }
+  const timer = setTimeout(() => {
+    pendingUploads.delete(filename);
+    uploadFileToWalrus(filename, content, size).catch((err) =>
+      logError("upload", path, String(err)),
+    );
+  }, UPLOAD_DEBOUNCE_MS);
+  pendingUploads.set(filename, timer);
+}
 
 async function uploadFileToWalrus(filename: string, content: Buffer, size: number): Promise<void> {
+  // Delete old blob if this is an update
+  const existing = getFile(filename);
+  if (existing?.blob_object_id) {
+    log("upload", filename, `updating — deleting old blob objectId=${existing.blob_object_id}`);
+    try {
+      await deleteBlobFromWalrus(existing.blob_object_id, adminKeypair);
+      log("upload", filename, `old blob deleted`);
+    } catch (err) {
+      logError("upload", filename, `old blob delete failed: ${err}`);
+    }
+  }
+
   log("upload", filename, "encrypting...");
   const encrypted = await encrypt(new Uint8Array(content));
   log("upload", filename, `encrypted (${content.length}→${encrypted.length}B), uploading to Walrus...`);
