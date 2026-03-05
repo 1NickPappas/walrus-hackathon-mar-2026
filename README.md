@@ -233,3 +233,20 @@ bun run test
 ## Built With
 
 Built for the [Walrus Hackathon](https://www.walrus.xyz/) (March 2026).
+
+## Hackathon Challenge Requirements
+
+| # | Requirement | Status | Notes |
+|---|------------|--------|-------|
+| CR-1 | Basic write path — SDK/API usage, epoch parameter, deletable flag | ✅ | `walrus.ts` uploadBlob with epochs + deletable params |
+| CR-2 | Basic read path — aggregator usage, error handling for missing/expired blobs | ✅ | SDK readBlob + web aggregator proxy with error handling |
+| CR-3 | Quilt creation — multipart form handling, patch identifier scheme, response parsing | ❌ | |
+| CR-4 | Patch retrieval from quilt — patch by ID, quilt patch listing, identifier-based access | ❌ | |
+| CR-5 | Upload history tracking — blob IDs | ✅ | SQLite tracks filename, blob_id, size, epochs, created_at |
+| CR-6 | Error handling and display for all operations | ✅ | Server jsonError helper + web UI error banners |
+| CR-7 | Smart contract asset management | ✅ | Move contract: Registry, allowlists, manifests, seal_approve |
+| CR-8 | Deletable blob lifecycle — immutability vs deletability | ✅ | Blobs created deletable by default; delete on file unlink |
+| CR-9 | Storage cost estimation before upload | ✅ | Server logs estimated cost before submitting upload |
+| CR-10 | Extend storage duration by additional epochs | ❌ | |
+| CR-11 | Blob integrity verification (hash check after download) | ✅ | Client verifies blob authentication before decryption |
+| CR-12 | Uploaded to GitHub; deployed on public URL | ✅ | GitHub repo + live web app |
