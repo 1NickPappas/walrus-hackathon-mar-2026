@@ -11,6 +11,67 @@ Walrus Drive is a decentralized Dropbox for macOS. Files dropped into a FUSE-mou
 - **Walrus** → decentralized blob storage
 - **Sui** → on-chain file registry (Move smart contract)
 
+## Prerequisites
+
+### System dependencies
+
+| Dependency | Version | Why | Install (Debian/Ubuntu ARM64) |
+|---|---|---|---|
+| **Node.js** | ≥ 18 | `fuse-native` is a native Node addon; `tsx` runs the FUSE client under Node | `curl -fsSL https://deb.nodesource.com/setup_20.x \| sudo bash - && sudo apt install -y nodejs` |
+| **Bun** | ≥ 1.1 | HTTP server runtime, package manager, SQLite (`bun:sqlite`) | `curl -fsSL https://bun.sh/install \| bash` |
+| **libfuse-dev** | 2.x or 3.x | FUSE kernel interface — `fuse-native` compiles against this | `sudo apt install -y libfuse-dev` (or `fuse3 libfuse3-dev`) |
+| **build-essential** | — | C/C++ toolchain for compiling `fuse-native` native addon | `sudo apt install -y build-essential` |
+| **Sui CLI** | ≥ 1.x | `sui move build` for Move contract compilation (used by tests) | See [Sui install docs](https://docs.sui.io/guides/developer/getting-started/sui-install) |
+
+**macOS:** Install [macFUSE](https://osxfuse.github.io/) instead of `libfuse-dev`. Xcode command line tools provide the C++ toolchain.
+
+### Sui wallet setup
+
+You need two funded Sui testnet wallets (admin + user):
+
+1. Generate keys: `sui keytool generate ed25519` (run twice)
+2. Export private keys in `suiprivkey1q...` format
+3. Fund with testnet SUI via [Sui faucet](https://faucet.testnet.sui.io/)
+4. Fund with testnet WAL tokens for Walrus storage fees — WAL is separate from SUI
+
+### Environment variables
+
+Copy `app/.env.example` to `app/.env` and fill in:
+
+```bash
+NETWORK=testnet
+RPC_URL=https://fullnode.testnet.sui.io:443
+ADMIN_PRIVATE_KEY=suiprivkey1q...    # Admin wallet (owns files, pays for uploads)
+USER_PRIVATE_KEY=suiprivkey1q...     # Test user (for decrypt tests)
+PACKAGE_ID=0x...                     # Published Move package ID (from test or manual deploy)
+REGISTRY_ID=0x...                    # Shared Registry object ID (created on publish)
+# DB is auto-created as a hidden file next to the mount point (e.g. ~/walrusfs → ~/.walrusfs.db)
+```
+
+### Quick start
+
+```bash
+# 1. Install system deps (Linux ARM64)
+sudo apt install -y build-essential libfuse-dev
+
+# 2. Install JS deps
+cd app
+bun install
+
+# 3. Set up env
+cp .env.example .env
+# Edit .env with your keys and IDs
+
+# 4. Type-check
+bun run build
+
+# 5. Run server only (no FUSE mount)
+bun run start:server
+
+# 6. Run full stack (server + FUSE mount at ~/walrusfs)
+bun run start
+```
+
 ## Runtime & tooling
 
 - **Runtime:** Two-process model — Bun runs the HTTP server, Node (via `tsx`) runs the FUSE client. See Architecture section below.
@@ -33,12 +94,12 @@ walrus-hackathon-mar-2026/
 │   └── src/
 │       ├── index.ts                   # Entry point — starts Bun server, spawns FUSE via tsx
 │       ├── fuse-mount.ts             # ✅ Standalone FUSE entry point (runs under Node/tsx)
-│       ├── server.ts                  # ✅ Bun.serve() HTTP server — in-memory FS, 12 FUSE ops
+│       ├── server.ts                  # ✅ Bun.serve() HTTP server — in-memory FS, 12 FUSE ops, Walrus upload on release
 │       ├── fuse.ts                    # ✅ FUSE HTTP thin client (12 ops → localhost:3001)
 │       ├── types/fuse-native.d.ts     # ✅ TypeScript declarations for fuse-native
-│       ├── db.ts                      # 🔲 Stub — SQLite local cache (will use bun:sqlite)
+│       ├── db.ts                      # ✅ SQLite local cache via bun:sqlite (filename → blobId)
 │       ├── walrus.ts                  # ✅ Walrus blob upload/download via @mysten/walrus SDK
-│       ├── seal.ts                    # 🔲 Stub — Seal encrypt/decrypt
+│       ├── seal.ts                    # ✅ Seal encrypt (decrypt stub — needs SessionKey)
 │       └── sui.ts                     # 🔲 Stub — Sui on-chain file metadata
 │   ├── test/
 │   │   └── walrus-drive.test.ts       # ✅ Integration tests: publish, allowlist, walrus, encrypt, decrypt
@@ -127,9 +188,9 @@ Key functions: `register`, `grant_access`, `revoke_access`, `publish_manifest`, 
 - **Fetch timeout:** 30-second `AbortSignal.timeout` prevents FUSE hangs if the server is down.
 - **Graceful unmount:** SIGINT/SIGTERM handlers call `fuse.unmount()` with `diskutil unmount force` fallback.
 - **Type declarations:** `fuse-native` has no built-in types. We use namespace merging in `types/fuse-native.d.ts` so `Fuse.FuseOperations` works alongside `export = Fuse`.
-- **No `better-sqlite3`:** Removed in favor of `bun:sqlite` (built into Bun runtime). `db.ts` is still a stub.
+- **No `better-sqlite3`:** Uses `bun:sqlite` (built into Bun runtime) — no native SQLite addon needed.
 - **Two-process model:** `index.ts` spawns `fuse-mount.ts` via `npx tsx` (Node). Signals are forwarded for graceful cleanup. Each half can be run independently with `start:server` / `start:fuse` for debugging.
-- **Filename timestamp prefix (temporary):** `handleCreate` in `server.ts` prepends an ISO timestamp to filenames (`test.txt` → `2026-03-04T12-34-56_test.txt`). This is **for testing only** — remove it when integrating Walrus and Sui.
+- **Internal files** (`.walrusfs.db`, `.walrusfs.db-wal`, `.walrusfs.db-shm`, `.DS_Store`) are excluded from Walrus upload — they only exist locally in the in-memory FS.
 - **Walrus SDK uses client extension pattern:** `suiClient.$extend(walrus())` — not a standalone constructor. Methods accessed via `client.walrus.writeBlob()` / `client.walrus.readBlob()`. Uploads require WAL tokens (not SUI) for storage fees.
 
 ## Commands
@@ -137,7 +198,7 @@ Key functions: `register`, `grant_access`, `revoke_access`, `publish_manifest`, 
 ```bash
 cd app
 bun install                    # install deps (includes tsx for Node FUSE process)
-bun run start                  # start server (Bun) + FUSE (Node/tsx) at ./mnt
+bun run start                  # start server (Bun) + FUSE (Node/tsx) at ~/walrusfs
 bun run start /path/to/mount   # mount at custom path
 bun run start:server           # run HTTP server only (Bun)
 bun run start:fuse             # run FUSE client only (Node/tsx) — needs server running
@@ -146,15 +207,24 @@ bun run codegen                # generate TS bindings from Move contract
 bun run test                   # run integration tests (requires .env with keys)
 ```
 
-**Linux ARM64 note:** Ensure `libfuse-dev` (or `fuse3`) is installed for `fuse-native` to compile its native addon. Node must be available (for `tsx`).
+### Debugging: watch SQLite DB
+
+```bash
+watch -n 1 'sqlite3 ~/.walrusfs.db "SELECT * FROM files;"'
+```
+
+See **Prerequisites** section above for system dependency installation.
 
 ## Testing
 
 Integration tests in `app/test/walrus-drive.test.ts` run against **testnet**. They require a `.env` file (see `.env.example`):
 
 - `ADMIN_PRIVATE_KEY` / `USER_PRIVATE_KEY` — Sui private keys (`suiprivkey1q...`)
+- `PACKAGE_ID` — published Move package ID (`0x...`)
+- `REGISTRY_ID` — shared Registry object ID (`0x...`)
 - `NETWORK` — defaults to `testnet`
 - `RPC_URL` — defaults to `https://fullnode.testnet.sui.io:443`
+- SQLite DB is auto-created as a hidden file next to the mount point (e.g. `~/walrusfs` → `~/.walrusfs.db`)
 
 The test suite is sequential (each test depends on the previous):
 
@@ -171,8 +241,8 @@ The test suite is sequential (each test depends on the previous):
 ## What's next (TODO)
 
 1. ~~**HTTP server** (`app/src/server.ts`)~~ — ✅ Implemented with in-memory file tree (placeholder until Walrus/Seal/Sui replace it)
-2. **SQLite cache** (`app/src/db.ts`) — file tree metadata using `bun:sqlite`
+2. ~~**SQLite cache** (`app/src/db.ts`)~~ — ✅ Implemented with `bun:sqlite` (filename → blobId tracking)
 3. ~~**Walrus client** (`app/src/walrus.ts`)~~ — ✅ Implemented with `@mysten/walrus` SDK (upload/download blobs)
-4. **Seal integration** (`app/src/seal.ts`) — encrypt/decrypt using on-chain policy
+4. ~~**Seal integration** (`app/src/seal.ts`)~~ — ✅ Encrypt implemented (decrypt stub — needs SessionKey for read flow)
 5. **Sui client** (`app/src/sui.ts`) — create/update/delete FileEntry objects on-chain
 6. **Replace `sui move build` CLI with SDK** — test publish step uses `execSync("sui move build --dump-bytecode-as-base64")` which requires the Sui CLI binary. Replace with SDK-based Move compilation to remove CLI dependency and enable Dockerization

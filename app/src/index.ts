@@ -1,16 +1,17 @@
 import { startServer } from "./server.ts";
 import { spawn } from "child_process";
-import { resolve } from "path";
+import { resolve, join } from "path";
+import { homedir } from "os";
 
 export async function main() {
   console.log("walrus-drive starting…");
 
-  const mountPoint = process.argv[2] || "./mnt";
+  const mountPoint = process.argv[2] || join(homedir(), "walrusfs");
   const port = Number(process.argv[3]) || 3001;
   const baseUrl = `http://localhost:${port}`;
 
   // 1. Start HTTP server (runs in Bun)
-  startServer(port);
+  startServer(port, mountPoint);
   console.log(`server listening on ${baseUrl}`);
 
   // 2. Spawn FUSE client under Node via tsx (fuse-native needs libuv)

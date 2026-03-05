@@ -8,6 +8,12 @@ dist/
 *.db
 *.db-journal
 *.db-wal
+*.db-shm
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+.walrus-drive.sqlite*
+app/data/
 
 # Mount point
 mnt/
@@ -15,9 +21,6 @@ mnt/
 # Move build
 contract/build/
 contract/package_summaries/
-
-# Generated code
-app/src/generated/
 
 # OS
 .DS_Store

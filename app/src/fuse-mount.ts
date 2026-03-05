@@ -6,7 +6,10 @@
 
 import { mountDrive } from "./fuse.ts";
 
-const mountPoint = process.argv[2] || "./mnt";
+import { homedir } from "os";
+import { join } from "path";
+
+const mountPoint = process.argv[2] || join(homedir(), "walrusfs");
 const baseUrl = process.argv[3] || "http://localhost:3001";
 
 console.log(`fuse-mount: mounting ${mountPoint} → ${baseUrl}`);
