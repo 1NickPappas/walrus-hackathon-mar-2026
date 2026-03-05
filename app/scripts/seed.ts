@@ -1,32 +1,33 @@
 /**
- * Seed script — sets up on-chain + Walrus data so the web UI has something to display.
+ * Seed script — reads the local .walrusfs.db (populated by the FUSE server),
+ * builds a manifest, uploads it to Walrus, and publishes on-chain so the
+ * web UI has something to display.
  *
  * What it does (as admin):
  *   1. Register admin in the Registry (create allowlist) — skips if already done
  *   2. Grant access to the user address
- *   3. Encrypt test files with Seal (hello.txt + walrus.jpg)
- *   4. Upload encrypted blobs to Walrus
- *   5. Build a JSON manifest: [{name, blobId, size, createdAt}]
- *   6. Upload manifest JSON to Walrus
- *   7. Publish manifest blob ID on-chain
+ *   3. Read file records from the local SQLite DB
+ *   4. Build a JSON manifest from DB records
+ *   5. Upload manifest JSON to Walrus
+ *   6. Publish manifest blob ID on-chain
  *
  * Usage:
- *   cd app && bun run scripts/seed-web.ts
- *   cd app && bun run scripts/seed-web.ts --user-address 0xABC...
+ *   cd app && bun run seed-web
+ *   cd app && bun run seed-web --user-address 0xABC...
+ *   cd app && bun run seed-web --db ~/.walrusfs.db
  *
  * Reads ADMIN_PRIVATE_KEY, USER_PRIVATE_KEY, PACKAGE_ID, REGISTRY_ID from .env
  */
 
 import "dotenv/config";
-import { readFileSync } from "fs";
-import { resolve, dirname } from "path";
-import { fileURLToPath } from "url";
+import { join } from "path";
+import { homedir } from "os";
 
+import { Database } from "bun:sqlite";
 import { SuiGrpcClient } from "@mysten/sui/grpc";
 import { Transaction } from "@mysten/sui/transactions";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { decodeSuiPrivateKey } from "@mysten/sui/cryptography";
-import { SealClient } from "@mysten/seal";
 
 import {
   register,
@@ -34,15 +35,7 @@ import {
   publishManifest,
 } from "../src/generated/walrus_drive/drive.js";
 import { initWalrus, uploadBlob } from "../src/walrus.ts";
-import { encrypt } from "../src/seal.ts";
 import { findSharedWithMe, getManifestBlobId } from "../src/sharing.ts";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-
-const TESTNET_KEY_SERVERS = [
-  { objectId: "0x73d05d62c18d9374e3ea529e8e0ed6161da1a141a94d3f76ae3fe4e99356db75", weight: 1 },
-  { objectId: "0xf5d14a81a982144ae441cd7d64b09027f116a468bd36e7eca494f750591623c8", weight: 1 },
-];
 
 // ── Config ──────────────────────────────────────────────────
 
@@ -57,11 +50,6 @@ if (!packageId || !registryId) {
 }
 
 const client = new SuiGrpcClient({ network, baseUrl: rpcUrl });
-const sealClient = new SealClient({
-  suiClient: client,
-  serverConfigs: TESTNET_KEY_SERVERS,
-  verifyKeyServers: false,
-});
 
 const adminKey = decodeSuiPrivateKey(process.env.ADMIN_PRIVATE_KEY!);
 const adminKeypair = Ed25519Keypair.fromSecretKey(adminKey.secretKey);
@@ -78,10 +66,15 @@ if (cliUserAddress) {
   userAddress = userKeypair.getPublicKey().toSuiAddress();
 }
 
+// DB path: CLI arg or default (~/.walrusfs.db)
+const cliDbPath = process.argv.find((a) => a.startsWith("--db="))?.split("=")[1];
+const dbPath = cliDbPath ?? join(homedir(), ".walrusfs.db");
+
 console.log("Admin:", adminAddress);
 console.log("User:", userAddress);
 console.log("Package:", packageId);
 console.log("Registry:", registryId);
+console.log("DB:", dbPath);
 console.log();
 
 // ── Helpers ─────────────────────────────────────────────────
@@ -101,7 +94,7 @@ async function signAndExec(tx: Transaction) {
 
 // ── Step 1: Register admin ──────────────────────────────────
 
-console.log("1/7  Registering admin (creating allowlist)...");
+console.log("1/6  Registering admin (creating allowlist)...");
 try {
   const tx = new Transaction();
   register({ package: packageId, arguments: { registry: registryId } })(tx);
@@ -117,7 +110,7 @@ try {
 
 // ── Step 2: Grant access to user ────────────────────────────
 
-console.log("2/7  Granting access to user...");
+console.log("2/6  Granting access to user...");
 try {
   const tx = new Transaction();
   grantAccess({ package: packageId, arguments: { registry: registryId, addr: userAddress } })(tx);
@@ -131,15 +124,29 @@ try {
   }
 }
 
-// ── Step 3–4: Encrypt and upload test files ─────────────────
+// ── Step 3: Read file records from local DB ──────────────────
 
-const testFiles = [
-  { path: resolve(__dirname, "../test_assets/sui.jpg"), name: "sui.jpg" },
-  { path: resolve(__dirname, "../test_assets/Walrus Protocol Pitch.pptx"), name: "Walrus Protocol Pitch.pptx" },
-  { path: resolve(__dirname, "../test_assets/Sui & Move Bootcamp _ Thessaloniki, 19-30 May, Recordings.docx"), name: "Sui & Move Bootcamp _ Thessaloniki, 19-30 May, Recordings.docx" },
-];
+console.log("3/6  Reading local DB...");
+const db = new Database(dbPath, { readonly: true });
+const files = db.query("SELECT filename, blob_id, size, created_at FROM files ORDER BY created_at DESC").all() as {
+  filename: string;
+  blob_id: string;
+  size: number;
+  created_at: string;
+}[];
+db.close();
 
-initWalrus(client);
+if (files.length === 0) {
+  console.error("No files found in the database. Upload some files via FUSE first.");
+  process.exit(1);
+}
+
+console.log(`     Found ${files.length} file(s):`);
+for (const f of files) {
+  console.log(`       - ${f.filename} (${f.size} bytes, blob=${f.blob_id})`);
+}
+
+// ── Step 4: Build manifest JSON ──────────────────────────────
 
 interface ManifestEntry {
   name: string;
@@ -148,48 +155,27 @@ interface ManifestEntry {
   createdAt: number;
 }
 
-const manifest: ManifestEntry[] = [];
+const manifest: ManifestEntry[] = files.map((f) => ({
+  name: f.filename,
+  blobId: f.blob_id,
+  size: f.size,
+  createdAt: new Date(f.created_at).getTime(),
+}));
 
-for (const [i, file] of testFiles.entries()) {
-  const plaintext = readFileSync(file.path);
-  console.log(`3/7  [${i + 1}/${testFiles.length}] Encrypting ${file.name} (${plaintext.length} bytes)...`);
-
-  const encryptedBytes = await encrypt({
-    sealClient,
-    packageId,
-    registryId,
-    ownerAddress: adminAddress,
-    data: plaintext,
-  });
-  console.log(`     Encrypted: ${encryptedBytes.length} bytes`);
-
-  console.log(`4/7  [${i + 1}/${testFiles.length}] Uploading ${file.name} to Walrus...`);
-  const blobId = await uploadBlob(encryptedBytes, adminKeypair, { epochs: 3 });
-  console.log("     Blob ID:", blobId);
-
-  manifest.push({
-    name: file.name,
-    blobId,
-    size: plaintext.length,
-    createdAt: Date.now(),
-  });
-}
-
-// ── Step 5: Build manifest JSON ─────────────────────────────
-
-console.log("5/7  Building manifest JSON...");
-const manifestJson = new TextEncoder().encode(JSON.stringify(manifest));
+console.log("4/6  Building manifest JSON...");
 console.log("     Manifest:", JSON.stringify(manifest, null, 2));
 
-// ── Step 6: Upload manifest to Walrus ───────────────────────
+// ── Step 5: Upload manifest to Walrus ────────────────────────
 
-console.log("6/7  Uploading manifest to Walrus...");
-const manifestBlobId = await uploadBlob(manifestJson, adminKeypair, { epochs: 3 });
+console.log("5/6  Uploading manifest to Walrus...");
+initWalrus(client);
+const manifestJson = new TextEncoder().encode(JSON.stringify(manifest));
+const { blobId: manifestBlobId } = await uploadBlob(manifestJson, adminKeypair, { epochs: 5 });
 console.log("     Manifest Blob ID:", manifestBlobId);
 
-// ── Step 7: Publish manifest on-chain ───────────────────────
+// ── Step 6: Publish manifest on-chain ────────────────────────
 
-console.log("7/7  Publishing manifest on-chain...");
+console.log("6/6  Publishing manifest on-chain...");
 {
   const tx = new Transaction();
   publishManifest({ package: packageId, arguments: { registry: registryId, blobId: manifestBlobId } })(tx);
