@@ -168,7 +168,8 @@ describe("walrus-drive", () => {
 
   it("should upload and download a blob via Walrus", async () => {
     initWalrus(client);
-    blobId = await uploadBlob(plaintext, adminKeypair, { epochs: 3 });
+    const result = await uploadBlob(plaintext, adminKeypair, { epochs: 3 });
+    blobId = result.blobId;
     expect(blobId).toBeTruthy();
     console.log("Blob ID:", blobId);
 
@@ -194,7 +195,8 @@ describe("walrus-drive", () => {
 
   it("should upload encrypted blob and publish manifest", async () => {
     // Upload encrypted bytes to Walrus
-    encryptedBlobId = await uploadBlob(encryptedBytes, adminKeypair, { epochs: 3 });
+    const encResult = await uploadBlob(encryptedBytes, adminKeypair, { epochs: 3 });
+    encryptedBlobId = encResult.blobId;
     expect(encryptedBlobId).toBeTruthy();
     console.log("Encrypted Blob ID:", encryptedBlobId);
 
