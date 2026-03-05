@@ -15,7 +15,7 @@ import { mkdirSync } from "fs";
 import { homedir } from "os";
 import { initDb, upsertFile, getFile, deleteFile } from "./db.ts";
 import { initWalrus, uploadBlob, deleteBlobFromWalrus } from "./walrus.ts";
-import { initSeal, encrypt } from "./seal.ts";
+import { encrypt } from "./seal.ts";
 
 // Bun's Server type is generic; we don't use WebSockets so `unknown` suffices.
 type BunServer = ReturnType<typeof Bun.serve>;
@@ -25,6 +25,8 @@ type BunServer = ReturnType<typeof Bun.serve>;
 export let packageId: string;
 let registryId: string;
 let adminKeypair: Ed25519Keypair;
+let adminAddress: string;
+let sealClient: SealClient;
 
 // ── Internal files (excluded from Walrus upload) ────────────
 
@@ -527,7 +529,13 @@ async function uploadFileToWalrus(filename: string, content: Buffer, size: numbe
   }
 
   log("upload", filename, "encrypting...");
-  const encrypted = await encrypt(new Uint8Array(content));
+  const encrypted = await encrypt({
+    sealClient,
+    packageId,
+    registryId,
+    ownerAddress: adminAddress,
+    data: new Uint8Array(content),
+  });
   log("upload", filename, `encrypted (${content.length}→${encrypted.length}B), uploading to Walrus...`);
   const { blobId, blobObjectId } = await uploadBlob(encrypted, adminKeypair, { epochs: STORAGE_EPOCHS });
   log("upload", filename, `uploaded, blobId=${blobId} objectId=${blobObjectId} (${STORAGE_EPOCHS} epochs)`);
@@ -577,7 +585,7 @@ export function startServer(port = 3001, mountPoint = join(homedir(), "walrusfs"
   if (!adminPrivKey) throw new Error("ADMIN_PRIVATE_KEY is required in .env");
   const decoded = decodeSuiPrivateKey(adminPrivKey);
   adminKeypair = Ed25519Keypair.fromSecretKey(decoded.secretKey);
-  const adminAddress = adminKeypair.getPublicKey().toSuiAddress();
+  adminAddress = adminKeypair.getPublicKey().toSuiAddress();
 
   log("server", "config", `PACKAGE_ID=${packageId}`);
   log("server", "config", `REGISTRY_ID=${registryId}`);
@@ -592,12 +600,11 @@ export function startServer(port = 3001, mountPoint = join(homedir(), "walrusfs"
   initWalrus(suiClient);
 
   // ── Init Seal ──
-  const sealClient = new SealClient({
+  sealClient = new SealClient({
     suiClient,
     serverConfigs: TESTNET_KEY_SERVERS,
     verifyKeyServers: false,
   });
-  initSeal(sealClient, packageId, registryId, adminAddress);
 
   // ── Init SQLite ── hidden file next to the mount point
   const resolvedMount = resolve(mountPoint);
