@@ -1,4 +1,4 @@
-# Walrus FS
+# walrusfs-fuse
 
 **A decentralized filesystem for Linux (and macOS)** -- drop files into a virtual drive, and they're automatically encrypted, stored on [Walrus](https://www.walrus.xyz/), and secured by [Sui](https://sui.io/).
 
