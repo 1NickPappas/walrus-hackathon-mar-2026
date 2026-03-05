@@ -207,6 +207,12 @@ bun run codegen                # generate TS bindings from Move contract
 bun run test                   # run integration tests (requires .env with keys)
 ```
 
+### Debugging: watch SQLite DB
+
+```bash
+watch -n 1 'sqlite3 ~/.walrusfs.db "SELECT * FROM files;"'
+```
+
 See **Prerequisites** section above for system dependency installation.
 
 ## Testing
